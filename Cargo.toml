@@ -1,0 +1,11 @@
+
+[workspace]
+members = [
+    "scanflow",
+    "scanflow-cli",
+]
+
+default-members = [
+    "scanflow",
+    "scanflow-cli",
+]
