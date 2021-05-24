@@ -1,7 +1,4 @@
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
-use memflow_win32::error::*;
-use memflow_win32::win32::Win32Process;
+use memflow::prelude::v1::*;
 
 use crate::pbar::PBar;
 use iced_x86::{Decoder, DecoderOptions};
@@ -35,10 +32,7 @@ impl Disasm {
     /// # Arguments
     ///
     /// * `process` - target process to find the variables in
-    pub fn collect_globals(
-        &mut self,
-        process: &mut Win32Process<impl VirtualMemory + Clone>,
-    ) -> Result<()> {
+    pub fn collect_globals(&mut self, process: &mut (impl Process + Clone)) -> Result<()> {
         self.reset();
         let modules = process.module_list()?;
 
@@ -58,7 +52,7 @@ impl Disasm {
                     let mut image = unsafe { ctx_image.get() };
 
                     process
-                        .virt_mem
+                        .virt_mem()
                         .virt_read_raw_into(m.base, &mut image)
                         .data_part()
                         .ok()?;
@@ -66,7 +60,7 @@ impl Disasm {
                     std::mem::drop(process);
 
                     let pefile = PeFile::from_bytes(image.as_slice())
-                        .map_err(|_| Error::Other("Failed to parse header"))
+                        .map_err(|_| ErrorKind::InvalidExeFile)
                         .ok()?;
 
                     const IMAGE_SCN_CNT_CODE: u32 = 0x20;
@@ -90,13 +84,15 @@ impl Disasm {
                                 .filter_map(|_| {
                                     let end = std::cmp::min(end, addr + CHUNK_SIZE as u64);
                                     process
-                                        .virt_mem
+                                        .virt_mem()
                                         .virt_read_raw_into(addr.into(), &mut bytes)
                                         .data_part()
                                         .ok()?;
 
                                     let mut decoder = Decoder::new(
-                                        process.proc_info.proc_arch.bits().into(),
+                                        ArchitectureObj::from(process.info().proc_arch)
+                                            .bits()
+                                            .into(),
                                         &bytes,
                                         DecoderOptions::NONE,
                                     );

@@ -1,8 +1,5 @@
 use memflow::prelude::v1::*;
 
-use memflow_win32::win32::Win32Process;
-use memflow_win32::{Error, Result};
-
 use std::convert::TryInto;
 use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
@@ -17,7 +14,7 @@ pub const MAX_PRINT: usize = 16;
 
 /// Scanflow CLI context.
 pub struct CliCtx<T> {
-    process: Win32Process<T>,
+    process: T,
     value_scanner: ValueScanner,
     typename: Option<String>,
     buf_len: usize,
@@ -26,7 +23,7 @@ pub struct CliCtx<T> {
 }
 
 impl<T> CliCtx<T> {
-    fn new(process: Win32Process<T>) -> Self {
+    fn new(process: T) -> Self {
         Self {
             process,
             value_scanner: Default::default(),
@@ -87,11 +84,11 @@ impl<'a, T> CliCmd<T> for CmdDef<'a, T> {
 /// # Arguments
 ///
 /// * `process` - target process
-pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
+pub fn run<T: Process + Clone>(process: T) -> Result<()> {
     let mut ctx = CliCtx::new(process);
 
     let mut cmds = [
-        CmdDef::new("reset", "r", |_, ctx| {
+        CmdDef::<T>::new("reset", "r", |_, ctx| {
             ctx.value_scanner.reset();
             ctx.disasm.reset();
             ctx.pointer_map.reset();
@@ -100,18 +97,19 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
         }, "reset all context state"),
         CmdDef::new("print", "p", |_, ctx| { 
             if let Some(t) = &ctx.typename {
-                print_matches(&ctx.value_scanner, &mut ctx.process.virt_mem, ctx.buf_len, t)
+                print_matches(&ctx.value_scanner, &mut ctx.process.virt_mem(), ctx.buf_len, t)
             } else {
-                Err(Error::Other("Perform a scan first!"))
+                Err(ErrorKind::Uninitialized.into())
             }
         }, "print found matches after initial scan"),
         CmdDef::new("pointer_map", "pm", |_, ctx| {
+            let size_addr = ArchitectureObj::from(ctx.process.info().proc_arch).size_addr();
+
             ctx.pointer_map.reset();
             ctx.pointer_map.create_map(
-                &mut ctx.process.virt_mem,
-                ctx.process.proc_info.proc_arch.size_addr(),
-            )?;
-            Ok(())
+                &mut ctx.process,
+                size_addr,
+            )
         }, "build a pointer map"),
         CmdDef::new("globals", "g", |_, ctx| {
             ctx.disasm.reset();
@@ -132,7 +130,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                     Err(e) => Err(e),
                 }
             } else {
-                Err(Error::Other("Invalid usage"))
+                Err(ErrorKind::ArgValidation.into())
             }
         }, "build a pointer map. args: {addr}"),
         CmdDef::new("offset_scan", "os", |args, ctx| {
@@ -140,9 +138,10 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 scan_fmt_some!(args, "{} {} {} {} {x}", String, usize, usize, usize, [hex u64])
             {
                 if ctx.pointer_map.map().is_empty() {
+                    let size_addr = ArchitectureObj::from(ctx.process.info().proc_arch).size_addr();
                     ctx.pointer_map.create_map(
-                        &mut ctx.process.virt_mem,
-                        ctx.process.proc_info.proc_arch.size_addr(),
+                        &mut ctx.process,
+                        size_addr
                     )?;
                 }
 
@@ -198,7 +197,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
 
                 Ok(())
             } else {
-                Err(Error::Other("Invalid usage"))
+                Err(ErrorKind::InvalidArgument.into())
             }
         }, "scan for offsets to matches. Arguments: {y/[n]} {lower range} {upper range} {max depth} ({filter})"),
         CmdDef::new("write", "wr", |args, ctx| {
@@ -206,7 +205,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 args,
                 &ctx.typename,
                 ctx.value_scanner.matches(),
-                &mut ctx.process.virt_mem,
+                ctx.process.virt_mem(),
             )
         }, "write values to select matches. Arguments: {idx/*} {o/c} {value}"),
         ];
@@ -216,11 +215,11 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
             print!("[{}] ", tn)
         }
 
-        print!("scanflow@{} >> ", ctx.process.proc_info.name);
+        print!("scanflow@{} >> ", ctx.process.info().name);
 
         std::io::stdout().flush().ok();
 
-        let line = get_line().map_err(|_| Error::Other("Failed to get line"))?;
+        let line = get_line().map_err(|_| ErrorKind::UnableToReadFile)?;
 
         let line = line.trim();
 
@@ -263,14 +262,8 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 } else {
                     if let Some((buf, t)) = parse_input(line, &ctx.typename) {
                         ctx.buf_len = buf.len();
-                        ctx.value_scanner
-                            .scan_for(&mut ctx.process.virt_mem, &buf)?;
-                        print_matches(
-                            &ctx.value_scanner,
-                            &mut ctx.process.virt_mem,
-                            ctx.buf_len,
-                            &t,
-                        )?;
+                        ctx.value_scanner.scan_for(&mut ctx.process, &buf)?;
+                        print_matches(&ctx.value_scanner, ctx.process.virt_mem(), ctx.buf_len, &t)?;
                         ctx.typename = Some(t);
                     } else {
                         println!("Invalid input! Use `help` for command reference.");
@@ -297,7 +290,7 @@ pub fn print_matches<V: VirtualMemory>(
         println!(
             "{:x}: {}",
             m,
-            print_value(&buf, typename).ok_or(Error::Other("Failed to parse type"))?
+            print_value(&buf, typename).ok_or(ErrorKind::InvalidArgument)?
         );
     }
 
@@ -322,10 +315,10 @@ pub fn write_value(
     mut virt_mem: impl VirtualMemory,
 ) -> Result<()> {
     if matches.is_empty() {
-        return Err(Error::Other("no matches found!"));
+        return Err(ErrorKind::Uninitialized.into());
     }
 
-    let usage = Error::Other("Invalid usage");
+    let usage: Error = ErrorKind::ArgValidation.into();
     let mut words = args.splitn(3, " ");
     let (idx, mode, value) = (
         words.next().ok_or(usage)?,
@@ -338,7 +331,7 @@ pub fn write_value(
     } else {
         (
             idx.parse::<usize>()
-                .map_err(|_| Error::Other("failed to parse index!"))?,
+                .map_err(|_| ErrorKind::InvalidArgument)?,
             1,
         )
     };
@@ -346,10 +339,10 @@ pub fn write_value(
     let gl = match mode {
         "o" => Ok(None),
         "c" => Ok(Some(async_get_line())),
-        _ => Err(Error::Other("failed to parse mode!")),
+        _ => Err(ErrorKind::InvalidArgument),
     }?;
 
-    let (v, _) = parse_input(value, typename).ok_or(Error::Other("failed to parse value!"))?;
+    let (v, _) = parse_input(value, typename).ok_or(ErrorKind::InvalidArgument)?;
 
     println!("Write to matches {}-{}", skip, skip + take - 1);
 

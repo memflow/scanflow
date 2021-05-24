@@ -1,7 +1,5 @@
 use crate::pbar::PBar;
-use memflow::error::*;
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
+use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
 use std::cmp::Ordering;
@@ -35,19 +33,21 @@ impl PointerMap {
     /// * `size_addr` - size of a pointer (4 bytes on 32 bit machines, 8 bytes on 64 bit machines).
     pub fn create_map(
         &mut self,
-        mem: &mut (impl VirtualMemory + Clone),
+        proc: &mut (impl Process + Clone),
         size_addr: usize,
     ) -> Result<()> {
         self.reset();
 
-        let mem_map = mem.virt_page_map_range(size::mb(16), Address::null(), (1u64 << 47).into());
+        let mem_map =
+            proc.virt_mem()
+                .virt_page_map_range(size::mb(16), Address::null(), (1u64 << 47).into());
 
         let pb = PBar::new(
             mem_map.iter().map(|(_, size)| *size as u64).sum::<u64>(),
             true,
         );
 
-        let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+        let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
         let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + size_addr - 1]);
 
         self.map
@@ -56,7 +56,8 @@ impl PointerMap {
                     .into_par_iter()
                     .step_by(0x1000)
                     .filter_map(|off| {
-                        let mut mem = unsafe { ctx.get() };
+                        let mut proc = unsafe { ctx.get() };
+                        let mem = proc.virt_mem();
                         let mut buf = unsafe { ctx_buf.get() };
 
                         mem.virt_read_raw_into(addr + off, buf.as_mut_slice())

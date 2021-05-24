@@ -1,10 +1,7 @@
-use memflow::connector::{inventory::ConnectorInventory, ConnectorArgs};
-
 use clap::*;
 use log::Level;
 
-use memflow_win32::win32::{Kernel, Win32Process};
-use memflow_win32::Result;
+use memflow::prelude::v1::{Result, *};
 
 use simplelog::{Config, TermLogger, TerminalMode};
 
@@ -14,7 +11,7 @@ extern crate scan_fmt;
 mod cli;
 
 fn main() -> Result<()> {
-    let (target, conn, args, level) = parse_args()?;
+    let (target, conn, args, os, os_args, level) = parse_args()?;
 
     TermLogger::init(
         level.to_level_filter(),
@@ -23,19 +20,22 @@ fn main() -> Result<()> {
     )
     .unwrap();
 
-    let inventory = unsafe { ConnectorInventory::scan() };
-    let connector = unsafe { inventory.create_connector(&conn, &args)? };
+    let inventory = Inventory::scan();
 
-    let mut kernel = Kernel::builder(connector).build_default_caches().build()?;
+    let os = inventory
+        .builder()
+        .connector(&conn)
+        .args(args)
+        .os(&os)
+        .args(os_args)
+        .build()?;
 
-    let process_info = kernel.process_info(&target)?;
-
-    let process = Win32Process::with_kernel(kernel, process_info);
+    let process = os.into_process_by_name(&target)?;
 
     cli::run(process)
 }
 
-fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
+fn parse_args() -> Result<(String, String, Args, String, Args, log::Level)> {
     let matches = App::new("scanflow-cli")
         .version(crate_version!())
         .author(crate_authors!())
@@ -51,6 +51,20 @@ fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
             Arg::with_name("conn-args")
                 .long("conn-args")
                 .short("x")
+                .takes_value(true)
+                .default_value(""),
+        )
+        .arg(
+            Arg::with_name("os")
+                .long("os")
+                .short("o")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("os-args")
+                .long("os-args")
+                .short("y")
                 .takes_value(true)
                 .default_value(""),
         )
@@ -76,7 +90,9 @@ fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
     Ok((
         matches.value_of("program").unwrap_or("").into(),
         matches.value_of("connector").unwrap_or("").into(),
-        ConnectorArgs::parse(matches.value_of("conn-args").unwrap())?,
+        Args::parse(matches.value_of("conn-args").unwrap())?,
+        matches.value_of("os").unwrap_or("").into(),
+        Args::parse(matches.value_of("os-args").unwrap())?,
         level,
     ))
 }

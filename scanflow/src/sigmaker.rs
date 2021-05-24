@@ -1,7 +1,4 @@
-use memflow::mem::{VirtualMemory, VirtualReadData};
-use memflow::types::{size, Address};
-use memflow_win32::error::*;
-use memflow_win32::win32::Win32Process;
+use memflow::prelude::v1::*;
 
 use iced_x86::{Code, ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use pelite::PeFile;
@@ -164,30 +161,29 @@ impl Sigmaker {
     /// * `disasm` - instance to disassembler state
     /// * `target_global` - target global variable to sig
     pub fn find_sigs(
-        process: &mut Win32Process<impl VirtualMemory>,
+        process: &mut impl Process,
         disasm: &Disasm,
         target_global: Address,
     ) -> Result<Vec<String>> {
         let addrs = disasm
             .inverse_map()
             .get(&target_global)
-            .ok_or(Error::Other("Invalid global variable"))?;
+            .ok_or(ErrorKind::InvalidArgument)?;
 
         let module = process
             .module_list()?
             .into_iter()
             .find(|m| m.base <= target_global && m.base + m.size > target_global)
-            .ok_or(Error::Other("Could not find target module"))?;
+            .ok_or(ErrorKind::ModuleNotFound)?;
 
         let mut image = vec![0; size::kb(128)];
 
         process
-            .virt_mem
+            .virt_mem()
             .virt_read_raw_into(module.base, &mut image)
             .data_part()?;
 
-        let pefile =
-            PeFile::from_bytes(&image).map_err(|_| Error::Other("Failed to parse header"))?;
+        let pefile = PeFile::from_bytes(&image).map_err(|_| ErrorKind::InvalidExeFile)?;
 
         const IMAGE_SCN_CNT_CODE: u32 = 0x20;
 
@@ -212,11 +208,13 @@ impl Sigmaker {
             .collect();
 
         process
-            .virt_mem
+            .virt_mem()
             .virt_read_raw_list(&mut read_list)
             .data_part()?;
 
-        let bitness = process.proc_info.proc_arch.bits().into();
+        let bitness = ArchitectureObj::from(process.info().proc_arch)
+            .bits()
+            .into();
 
         let mut states: Vec<_> = bufs
             .iter()
@@ -242,9 +240,7 @@ impl Sigmaker {
                     added = true;
                 }
             }
-            if !added
-                || Self::has_unique_matches(&states, &mut process.virt_mem, &ranges, &mut out)?
-            {
+            if !added || Self::has_unique_matches(&states, process.virt_mem(), &ranges, &mut out)? {
                 break;
             }
         }

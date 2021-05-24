@@ -1,7 +1,5 @@
 use crate::pbar::PBar;
-use memflow::error::*;
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
+use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
 
@@ -36,10 +34,13 @@ impl ValueScanner {
     ///
     /// * `mem` - memory object to scan for values in
     /// * `data` - data to scan or filter against
-    pub fn scan_for(&mut self, mem: &mut (impl VirtualMemory + Clone), data: &[u8]) -> Result<()> {
+    pub fn scan_for(&mut self, proc: &mut (impl Process + Clone), data: &[u8]) -> Result<()> {
         if !self.scanned {
-            self.mem_map =
-                mem.virt_page_map_range(size::mb(16), Address::null(), (1u64 << 47).into());
+            self.mem_map = proc.virt_mem().virt_page_map_range(
+                size::mb(16),
+                Address::null(),
+                (1u64 << 47).into(),
+            );
 
             let pb = PBar::new(
                 self.mem_map
@@ -49,7 +50,7 @@ impl ValueScanner {
                 true,
             );
 
-            let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+            let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + data.len() - 1]);
 
             self.matches
@@ -58,7 +59,8 @@ impl ValueScanner {
                         .into_par_iter()
                         .step_by(0x1000)
                         .filter_map(|off| {
-                            let mut mem = unsafe { ctx.get() };
+                            let mut proc = unsafe { ctx.get() };
+                            let mem = proc.virt_mem();
                             let mut buf = unsafe { ctx_buf.get() };
 
                             mem.virt_read_raw_into(addr + off, buf.as_mut_slice())
@@ -96,12 +98,13 @@ impl ValueScanner {
 
             let pb = PBar::new(old_matches.len() as u64, false);
 
-            let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+            let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; CHUNK_SIZE * data.len()]);
 
             self.matches
                 .par_extend(old_matches.par_chunks(CHUNK_SIZE).flat_map(|chunk| {
-                    let mut mem = unsafe { ctx.get() };
+                    let mut proc = unsafe { ctx.get() };
+                    let mem = proc.virt_mem();
                     let mut buf = unsafe { ctx_buf.get() };
 
                     if !data.is_empty() {
