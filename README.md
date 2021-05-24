@@ -8,7 +8,7 @@
 
 ## A comprehensive memory scanning library
 
-scanflow boasts a feature set similar to the likes of CheatEngine, with a simple command line interface. Utilizing [memflow](https://crates.io/memlfow), scanflow works in a wide range of situations - from virtual machines, to dedicated DMA hardware. A simple command line interface is provided, but it can also be used as a standalone library. With performance being at the forefront, scanflow should be able to achieve revolutionary memory scan speeds.
+scanflow boasts a feature set similar to the likes of CheatEngine, with a simple command line interface. Utilizing [memflow](https://crates.io/memlfow), scanflow works in a wide range of situations - from virtual machines, to dedicated DMA hardware. While it's focused around the CLI, it can also be used as a standalone library, easy to integrate to other memflow projects. With performance being at its forefront, scanflow should be able to achieve revolutionary memory scan speeds.
 
 ## Setting up
 
