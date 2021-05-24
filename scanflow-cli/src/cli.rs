@@ -3,17 +3,14 @@ use memflow::prelude::v1::*;
 use memflow_win32::win32::Win32Process;
 use memflow_win32::{Error, Result};
 
-use std::time::Instant;
-use std::sync::mpsc::{channel, Receiver};
-use std::thread;
 use std::convert::TryInto;
 use std::io::Write;
+use std::sync::mpsc::{channel, Receiver};
+use std::thread;
+use std::time::Instant;
 
 use scanflow::{
-    value_scanner::ValueScanner,
-    pointer_map::PointerMap,
-    disasm::Disasm,
-    sigmaker::Sigmaker
+    disasm::Disasm, pointer_map::PointerMap, sigmaker::Sigmaker, value_scanner::ValueScanner,
 };
 
 pub const MAX_PRINT: usize = 16;
@@ -25,7 +22,7 @@ pub struct CliCtx<T> {
     typename: Option<String>,
     buf_len: usize,
     disasm: Disasm,
-    pointer_map: PointerMap
+    pointer_map: PointerMap,
 }
 
 impl<T> CliCtx<T> {
@@ -36,7 +33,7 @@ impl<T> CliCtx<T> {
             typename: None,
             buf_len: 0,
             disasm: Default::default(),
-            pointer_map: Default::default()
+            pointer_map: Default::default(),
         }
     }
 }
@@ -61,11 +58,11 @@ pub struct CmdDef<'a, T> {
     long: &'a str,
     short: &'a str,
     invoke: CmdHandler<T>,
-    help: &'a str
+    help: &'a str,
 }
 
 impl<'a, T> CmdDef<'a, T> {
-    fn new (long: &'a str, short: &'a str, handle: CmdHandler<T>, help: &'a str) -> Self {
+    fn new(long: &'a str, short: &'a str, handle: CmdHandler<T>, help: &'a str) -> Self {
         Self {
             long,
             short,
@@ -215,7 +212,6 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
         ];
 
     loop {
-
         if let Some(tn) = &ctx.typename {
             print!("[{}] ", tn)
         }
@@ -249,14 +245,20 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
             x => {
                 if let Some(cmd) = cmds.iter_mut().find(|cmd| cmd.short == x || cmd.long == x) {
                     match cmd.invoke(args, &mut ctx) {
-                        Ok(()) => {},
-                        Err(e) => println!("{} error: {}\nHelp:\n{}", cmd.long, e, cmd.help())
+                        Ok(()) => {}
+                        Err(e) => println!("{} error: {}\nHelp:\n{}", cmd.long, e, cmd.help()),
                     }
                 } else {
                     if let Some((buf, t)) = parse_input(line, &ctx.typename) {
                         ctx.buf_len = buf.len();
-                        ctx.value_scanner.scan_for(&mut ctx.process.virt_mem, &buf)?;
-                        print_matches(&ctx.value_scanner, &mut ctx.process.virt_mem, ctx.buf_len, &t)?;
+                        ctx.value_scanner
+                            .scan_for(&mut ctx.process.virt_mem, &buf)?;
+                        print_matches(
+                            &ctx.value_scanner,
+                            &mut ctx.process.virt_mem,
+                            ctx.buf_len,
+                            &t,
+                        )?;
                         ctx.typename = Some(t);
                     } else {
                         println!("Invalid input!");

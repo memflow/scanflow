@@ -1,6 +1,7 @@
 # scanflow
 
 [![Crates.io](https://img.shields.io/crates/v/scanflow.svg)](https://crates.io/crates/scanflow)
+[![Crates.io](https://img.shields.io/crates/v/scanflow-cli.svg)](https://crates.io/crates/scanflow-cli)
 [![API Docs](https://docs.rs/scanflow/badge.svg)](https://docs.rs/scanflow)
 [![Build and test](https://github.com/h33p/scanflow/actions/workflows/build.yml/badge.svg)](https://github.com/h33p/scanflow/actions/workflows/build.yml)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

@@ -16,7 +16,12 @@ mod cli;
 fn main() -> Result<()> {
     let (target, conn, args, level) = parse_args()?;
 
-    TermLogger::init(level.to_level_filter(), Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        level.to_level_filter(),
+        Config::default(),
+        TerminalMode::Mixed,
+    )
+    .unwrap();
 
     let inventory = unsafe { ConnectorInventory::scan() };
     let connector = unsafe { inventory.create_connector(&conn, &args)? };
@@ -54,7 +59,7 @@ fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
                 .long("program")
                 .short("p")
                 .takes_value(true)
-                .required(true)
+                .required(true),
         )
         .get_matches();
 
