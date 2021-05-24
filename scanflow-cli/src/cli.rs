@@ -241,6 +241,18 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 println!();
 
                 println!("Anything not in this list will be interpreted as a scan input.");
+
+                println!();
+
+                println!("To scan memory, enter wanted data type and its value. The type is omitted in consequtive function calls.");
+                println!("Available types: str, str_utf16, i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64");
+
+                println!();
+
+                println!("Example:");
+                println!("i64 64");
+                println!("Next filtering call:");
+                println!("42");
             }
             x => {
                 if let Some(cmd) = cmds.iter_mut().find(|cmd| cmd.short == x || cmd.long == x) {
@@ -261,7 +273,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                         )?;
                         ctx.typename = Some(t);
                     } else {
-                        println!("Invalid input!");
+                        println!("Invalid input! Use `help` for command reference.");
                     }
                 }
             }
