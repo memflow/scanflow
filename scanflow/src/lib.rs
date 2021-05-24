@@ -13,9 +13,8 @@
 //! It may be worth trying out `scanflow-cli` - a command line interface built specificly around
 //! this library.
 
-pub mod value_scanner;
-pub mod pointer_map;
 pub mod disasm;
-pub mod sigmaker;
 pub mod pbar;
-
+pub mod pointer_map;
+pub mod sigmaker;
+pub mod value_scanner;

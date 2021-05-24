@@ -119,14 +119,13 @@ impl ValueScanner {
                     if !data.is_empty() {
                         out.extend(
                             chunk
-                            .iter()
-                            .zip(buf.chunks(data.len()))
-                            .filter_map(|(&a, buf)| if buf == data { Some(a) } else { None })
+                                .iter()
+                                .zip(buf.chunks(data.len()))
+                                .filter_map(|(&a, buf)| if buf == data { Some(a) } else { None }),
                         );
                     }
 
-                    out
-                        .into_par_iter()
+                    out.into_par_iter()
                 }));
             pb.finish();
         }

@@ -1,4 +1,3 @@
-
 #[cfg(feature = "progress_bar")]
 use std::sync::{
     atomic::{AtomicU64, Ordering},
