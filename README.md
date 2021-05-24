@@ -9,3 +9,31 @@
 ## A comprehensive memory scanning library
 
 scanflow boasts a feature set similar to the likes of CheatEngine, with a simple command line interface. Utilizing [memflow](https://crates.io/memlfow), scanflow works in a wide range of situations - from virtual machines, to dedicated DMA hardware. A simple command line interface is provided, but it can also be used as a standalone library. With performance being at the forefront, scanflow should be able to achieve revolutionary memory scan speeds.
+
+## Setting up
+
+1. Install the CLI:
+
+```
+cargo install scanflow-cli
+```
+
+2. Optionally enable ptrace for the binary (for use with qemu):
+
+```
+sudo setcap 'CAP_SYS_PTRACE=ep' ~/.cargo/bin/scanflow-cli
+```
+
+3. Set up connectors using [memflowup](https://github.com/memflow/memflowup)
+
+4. Enjoy:
+
+```
+scanflow-cli -c qemu_procfs -p svchost.exe
+```
+
+## Background
+
+This tool came to be as a result of my YouTube series detailing memflow and various memory scanning techniques. If you wish to learn more, check out the [memflow-applied playlist](https://www.youtube.com/playlist?list=PLrC4R7zDrxB17iWCy9eEdCaluCR3Bkn8q).
+
+[memflow-applied](https://github.com/h33p/memflow-applied) repo is also available with snapshots of different stages of development.
