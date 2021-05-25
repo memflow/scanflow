@@ -22,20 +22,23 @@ fn main() -> Result<()> {
 
     let inventory = Inventory::scan();
 
-    let os = inventory
-        .builder()
-        .connector(&conn)
-        .args(args)
-        .os(&os)
-        .args(os_args)
-        .build()?;
+    let os = match conn {
+        Some(conn) => inventory
+            .builder()
+            .connector(&conn)
+            .args(args)
+            .os(&os)
+            .args(os_args)
+            .build(),
+        None => inventory.builder().os(&os).args(os_args).build(),
+    }?;
 
     let process = os.into_process_by_name(&target)?;
 
     cli::run(process)
 }
 
-fn parse_args() -> Result<(String, String, Args, String, Args, log::Level)> {
+fn parse_args() -> Result<(String, Option<String>, Args, String, Args, log::Level)> {
     let matches = App::new("scanflow-cli")
         .version(crate_version!())
         .author(crate_authors!())
@@ -44,8 +47,7 @@ fn parse_args() -> Result<(String, String, Args, String, Args, log::Level)> {
             Arg::with_name("connector")
                 .long("connector")
                 .short("c")
-                .takes_value(true)
-                .required(true),
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("conn-args")
@@ -89,7 +91,7 @@ fn parse_args() -> Result<(String, String, Args, String, Args, log::Level)> {
 
     Ok((
         matches.value_of("program").unwrap_or("").into(),
-        matches.value_of("connector").unwrap_or("").into(),
+        matches.value_of("connector").map(|s| s.into()),
         Args::parse(matches.value_of("conn-args").unwrap())?,
         matches.value_of("os").unwrap_or("").into(),
         Args::parse(matches.value_of("os-args").unwrap())?,
