@@ -84,7 +84,7 @@ impl<'a, T> CliCmd<T> for CmdDef<'a, T> {
 /// # Arguments
 ///
 /// * `process` - target process
-pub fn run<T: Process + Clone>(process: T) -> Result<()> {
+pub fn run<T: Process + MemoryView + VirtualTranslate + Clone>(process: T) -> Result<()> {
     let mut ctx = CliCtx::new(process);
 
     let mut cmds = [
@@ -97,7 +97,7 @@ pub fn run<T: Process + Clone>(process: T) -> Result<()> {
         }, "reset all context state"),
         CmdDef::new("print", "p", |_, ctx| { 
             if let Some(t) = &ctx.typename {
-                print_matches(&ctx.value_scanner, &mut ctx.process.virt_mem(), ctx.buf_len, t)
+                print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, t)
             } else {
                 Err(ErrorKind::Uninitialized.into())
             }
@@ -205,7 +205,7 @@ pub fn run<T: Process + Clone>(process: T) -> Result<()> {
                 args,
                 &ctx.typename,
                 ctx.value_scanner.matches(),
-                ctx.process.virt_mem(),
+                &mut ctx.process,
             )
         }, "write values to select matches. Arguments: {idx/*} {o/c} {value}"),
         ];
@@ -263,7 +263,7 @@ pub fn run<T: Process + Clone>(process: T) -> Result<()> {
                     if let Some((buf, t)) = parse_input(line, &ctx.typename) {
                         ctx.buf_len = buf.len();
                         ctx.value_scanner.scan_for(&mut ctx.process, &buf)?;
-                        print_matches(&ctx.value_scanner, ctx.process.virt_mem(), ctx.buf_len, &t)?;
+                        print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, &t)?;
                         ctx.typename = Some(t);
                     } else {
                         println!("Invalid input! Use `help` for command reference.");
@@ -276,9 +276,9 @@ pub fn run<T: Process + Clone>(process: T) -> Result<()> {
     Ok(())
 }
 
-pub fn print_matches<V: VirtualMemory>(
+pub fn print_matches(
     value_scanner: &ValueScanner,
-    virt_mem: &mut V,
+    mem: &mut impl MemoryView,
     buf_len: usize,
     typename: &str,
 ) -> Result<()> {
@@ -286,7 +286,7 @@ pub fn print_matches<V: VirtualMemory>(
 
     for &m in value_scanner.matches().iter().take(MAX_PRINT) {
         let mut buf = vec![0; buf_len];
-        virt_mem.virt_read_raw_into(m, &mut buf).data_part()?;
+        mem.read_raw_into(m, &mut buf).data_part()?;
         println!(
             "{:x}: {}",
             m,
@@ -312,7 +312,7 @@ pub fn write_value(
     args: &str,
     typename: &Option<String>,
     matches: &[Address],
-    mut virt_mem: impl VirtualMemory,
+    mem: &mut impl MemoryView,
 ) -> Result<()> {
     if matches.is_empty() {
         return Err(ErrorKind::Uninitialized.into());
@@ -348,7 +348,7 @@ pub fn write_value(
 
     loop {
         for &m in matches.iter().skip(skip).take(take) {
-            virt_mem.virt_write_raw(m, v.as_ref()).data_part()?;
+            mem.write_raw(m, v.as_ref()).data_part()?;
         }
 
         if let Some(try_get_line) = &gl {

@@ -1,7 +1,7 @@
 use clap::*;
 use log::Level;
 
-use memflow::prelude::v1::{Result, *};
+use memflow::prelude::v1::{ErrorKind, Result, *};
 
 use simplelog::{Config, TermLogger, TerminalMode};
 
@@ -35,7 +35,7 @@ fn main() -> Result<()> {
 
     let process = os.into_process_by_name(&target)?;
 
-    cli::run(process)
+    cli::run(into!(process impl VirtualTranslate).ok_or(ErrorKind::UnsupportedOptionalFeature)?)
 }
 
 fn parse_args() -> Result<(String, Option<String>, Args, String, Args, log::Level)> {

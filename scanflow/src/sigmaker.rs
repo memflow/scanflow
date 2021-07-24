@@ -96,7 +96,7 @@ pub struct Sigmaker {}
 impl Sigmaker {
     fn has_unique_matches(
         states: &[Sigstate],
-        virt_mem: &mut impl VirtualMemory,
+        mem: &mut impl MemoryView,
         ranges: &[(Address, usize)],
         out: &mut Vec<String>,
     ) -> Result<bool> {
@@ -111,9 +111,7 @@ impl Sigmaker {
         for &(addr, size) in ranges {
             for off in (0..size).step_by(CHUNK_SIZE) {
                 let addr = addr + off;
-                virt_mem
-                    .virt_read_raw_into(addr, buf.as_mut_slice())
-                    .data_part()?;
+                mem.read_raw_into(addr, buf.as_mut_slice()).data_part()?;
 
                 for (off, w) in buf.windows(MAX_SIG_LENGTH).enumerate() {
                     let addr = addr + off;
@@ -161,7 +159,7 @@ impl Sigmaker {
     /// * `disasm` - instance to disassembler state
     /// * `target_global` - target global variable to sig
     pub fn find_sigs(
-        process: &mut impl Process,
+        process: &mut (impl Process + MemoryView),
         disasm: &Disasm,
         target_global: Address,
     ) -> Result<Vec<String>> {
@@ -178,10 +176,7 @@ impl Sigmaker {
 
         let mut image = vec![0; size::kb(128)];
 
-        process
-            .virt_mem()
-            .virt_read_raw_into(module.base, &mut image)
-            .data_part()?;
+        process.read_raw_into(module.base, &mut image).data_part()?;
 
         let pefile = PeFile::from_bytes(&image).map_err(|_| ErrorKind::InvalidExeFile)?;
 
@@ -204,13 +199,10 @@ impl Sigmaker {
 
         let mut read_list: Vec<_> = bufs
             .iter_mut()
-            .map(|(a, b)| VirtualReadData(*a, b))
+            .map(|(a, b)| MemData(*a, (&mut b[..]).into()))
             .collect();
 
-        process
-            .virt_mem()
-            .virt_read_raw_list(&mut read_list)
-            .data_part()?;
+        process.read_raw_list(&mut read_list).data_part()?;
 
         let bitness = ArchitectureObj::from(process.info().proc_arch)
             .bits()
@@ -240,7 +232,7 @@ impl Sigmaker {
                     added = true;
                 }
             }
-            if !added || Self::has_unique_matches(&states, process.virt_mem(), &ranges, &mut out)? {
+            if !added || Self::has_unique_matches(&states, process, &ranges, &mut out)? {
                 break;
             }
         }

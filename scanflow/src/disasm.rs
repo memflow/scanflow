@@ -32,7 +32,10 @@ impl Disasm {
     /// # Arguments
     ///
     /// * `process` - target process to find the variables in
-    pub fn collect_globals(&mut self, process: &mut (impl Process + Clone)) -> Result<()> {
+    pub fn collect_globals(
+        &mut self,
+        process: &mut (impl Process + MemoryView + Clone),
+    ) -> Result<()> {
         self.reset();
         let modules = process.module_list()?;
 
@@ -51,11 +54,7 @@ impl Disasm {
                     let mut process = unsafe { ctx.get() };
                     let mut image = unsafe { ctx_image.get() };
 
-                    process
-                        .virt_mem()
-                        .virt_read_raw_into(m.base, &mut image)
-                        .data_part()
-                        .ok()?;
+                    process.read_raw_into(m.base, &mut image).data_part().ok()?;
 
                     std::mem::drop(process);
 
@@ -84,8 +83,7 @@ impl Disasm {
                                 .filter_map(|_| {
                                     let end = std::cmp::min(end, addr + CHUNK_SIZE as u64);
                                     process
-                                        .virt_mem()
-                                        .virt_read_raw_into(addr.into(), &mut bytes)
+                                        .read_raw_into(addr.into(), &mut bytes)
                                         .data_part()
                                         .ok()?;
 
