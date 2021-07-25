@@ -95,6 +95,37 @@ pub fn run<T: Process + MemoryView + VirtualTranslate + Clone>(process: T) -> Re
             ctx.typename = None;
             Ok(())
         }, "reset all context state"),
+        CmdDef::<T>::new("reinterpret", "ri", |arg, ctx| {
+
+            let mut split = arg.split_whitespace();
+
+            let (arg, len) = (split.next().ok_or(ErrorKind::InvalidArgument)?.to_string(), split.next());
+
+            if let Some(Type(_, size, _, _)) = TYPES.iter().filter(|Type(name, _, _, _)| name == &arg).next() {
+                ctx.typename = Some(arg);
+
+                if let Some(size) = size {
+                    ctx.buf_len = *size;
+                } else {
+                    ctx.buf_len = len.and_then(|len| len.parse().ok()).ok_or(ErrorKind::InvalidArgument)?;
+                }
+
+                Ok(())
+            } else {
+                Err(ErrorKind::InvalidArgument.into())
+            }
+
+        }, "reinterpret matches as another type. Usage: {{type}} ({{unsized len}})"),
+        CmdDef::<T>::new("add", "a", |arg, ctx| {
+            let addr = u64::from_str_radix(arg, 16).map_err(|_| ErrorKind::InvalidArgument)?;
+            ctx.value_scanner.matches_mut().push(addr.into());
+            Ok(())
+        }, "manually add an address to matches"),
+        CmdDef::<T>::new("remove", "rm", |arg, ctx| {
+            let idx = arg.parse::<usize>().map_err(|_| ErrorKind::InvalidArgument)?;
+            ctx.value_scanner.matches_mut().remove(idx);
+            Ok(())
+        }, "remove match by index"),
         CmdDef::new("print", "p", |_, ctx| { 
             if let Some(t) = &ctx.typename {
                 print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, t)
@@ -368,31 +399,117 @@ pub fn write_value(
     Ok(())
 }
 
-pub fn print_value(buf: &[u8], typename: &str) -> Option<String> {
-    match typename {
-        "str" => Some(String::from_utf8_lossy(buf).to_string()),
-        "str_utf16" => {
+type PrintFn = fn(&[u8]) -> Option<String>;
+type ParseFn = fn(&str) -> Option<Box<[u8]>>;
+
+pub struct Type(&'static str, Option<usize>, PrintFn, ParseFn);
+
+const TYPES: &[Type] = &[
+    Type(
+        "str",
+        None,
+        |buf| Some(String::from_utf8_lossy(buf).to_string()),
+        |value| Some(Box::from(value.as_bytes())),
+    ),
+    Type(
+        "str_utf16",
+        None,
+        |buf| {
             let mut vec = vec![];
             for w in buf.chunks_exact(2) {
                 let s = u16::from_ne_bytes(w.try_into().unwrap());
                 vec.push(s);
             }
             Some(format!("{}", String::from_utf16_lossy(&vec)))
-        }
-        "i128" => Some(format!("{}", i128::from_ne_bytes(buf.try_into().ok()?))),
-        "i64" => Some(format!("{}", i64::from_ne_bytes(buf.try_into().ok()?))),
-        "i32" => Some(format!("{}", i32::from_ne_bytes(buf.try_into().ok()?))),
-        "i16" => Some(format!("{}", i16::from_ne_bytes(buf.try_into().ok()?))),
-        "i8" => Some(format!("{}", i8::from_ne_bytes(buf.try_into().ok()?))),
-        "u128" => Some(format!("{}", u128::from_ne_bytes(buf.try_into().ok()?))),
-        "u64" => Some(format!("{}", u64::from_ne_bytes(buf.try_into().ok()?))),
-        "u32" => Some(format!("{}", u32::from_ne_bytes(buf.try_into().ok()?))),
-        "u16" => Some(format!("{}", u16::from_ne_bytes(buf.try_into().ok()?))),
-        "u8" => Some(format!("{}", u8::from_ne_bytes(buf.try_into().ok()?))),
-        "f64" => Some(format!("{}", f64::from_ne_bytes(buf.try_into().ok()?))),
-        "f32" => Some(format!("{}", f32::from_ne_bytes(buf.try_into().ok()?))),
-        _ => None,
-    }
+        },
+        |value| {
+            let mut out = vec![];
+            for v in value.encode_utf16() {
+                out.extend(v.to_ne_bytes().iter().copied());
+            }
+            Some(out.into_boxed_slice())
+        },
+    ),
+    Type(
+        "i128",
+        Some(16),
+        |buf| Some(format!("{}", i128::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i128>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i64",
+        Some(8),
+        |buf| Some(format!("{}", i64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i32",
+        Some(4),
+        |buf| Some(format!("{}", i32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i32>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i16",
+        Some(2),
+        |buf| Some(format!("{}", i16::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i16>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i8",
+        Some(1),
+        |buf| Some(format!("{}", i8::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i8>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u128",
+        Some(16),
+        |buf| Some(format!("{}", u128::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u128>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u64",
+        Some(8),
+        |buf| Some(format!("{}", u64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u32",
+        Some(4),
+        |buf| Some(format!("{}", u32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u32>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u16",
+        Some(2),
+        |buf| Some(format!("{}", u16::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u16>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u8",
+        Some(1),
+        |buf| Some(format!("{}", u8::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u8>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "f64",
+        Some(4),
+        |buf| Some(format!("{}", f64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<f64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "f32",
+        Some(4),
+        |buf| Some(format!("{}", f32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<f32>().ok()?.to_ne_bytes())),
+    ),
+];
+
+pub fn print_value(buf: &[u8], typename: &str) -> Option<String> {
+    TYPES
+        .iter()
+        .filter(|Type(name, _, _, _)| name == &typename)
+        .next()
+        .and_then(|Type(_, _, pfn, _)| pfn(buf))
 }
 
 pub fn parse_input(input: &str, opt_typename: &Option<String>) -> Option<(Box<[u8]>, String)> {
@@ -403,28 +520,11 @@ pub fn parse_input(input: &str, opt_typename: &Option<String>) -> Option<(Box<[u
         (words.next()?, words.next()?)
     };
 
-    let b = match typename {
-        "str" => Some(Box::from(value.as_bytes())),
-        "str_utf16" => {
-            let mut out = vec![];
-            for v in value.encode_utf16() {
-                out.extend(v.to_ne_bytes().iter().copied());
-            }
-            Some(out.into_boxed_slice())
-        }
-        "i128" => Some(Box::from(value.parse::<i128>().ok()?.to_ne_bytes())),
-        "i64" => Some(Box::from(value.parse::<i64>().ok()?.to_ne_bytes())),
-        "i32" => Some(Box::from(value.parse::<i32>().ok()?.to_ne_bytes())),
-        "i16" => Some(Box::from(value.parse::<i16>().ok()?.to_ne_bytes())),
-        "i8" => Some(Box::from(value.parse::<i8>().ok()?.to_ne_bytes())),
-        "u128" => Some(Box::from(value.parse::<u128>().ok()?.to_ne_bytes())),
-        "u64" => Some(Box::from(value.parse::<u64>().ok()?.to_ne_bytes())),
-        "u32" => Some(Box::from(value.parse::<u32>().ok()?.to_ne_bytes())),
-        "u16" => Some(Box::from(value.parse::<u16>().ok()?.to_ne_bytes())),
-        "u8" => Some(Box::from(value.parse::<u8>().ok()?.to_ne_bytes())),
-        "f64" => Some(Box::from(value.parse::<f64>().ok()?.to_ne_bytes())),
-        "f32" => Some(Box::from(value.parse::<f32>().ok()?.to_ne_bytes())),
-        _ => None,
-    }?;
+    let b = TYPES
+        .iter()
+        .filter(|Type(name, _, _, _)| name == &typename)
+        .next()?
+        .3(value)?;
+
     Some((b, typename.to_string()))
 }

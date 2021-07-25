@@ -139,4 +139,8 @@ impl ValueScanner {
     pub fn matches(&self) -> &Vec<Address> {
         &self.matches
     }
+
+    pub fn matches_mut(&mut self) -> &mut Vec<Address> {
+        &mut self.matches
+    }
 }
