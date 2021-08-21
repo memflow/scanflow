@@ -212,7 +212,7 @@ impl Sigmaker {
             .iter()
             .map(|(start_ip, buf)| {
                 let mut decoder = Decoder::new(bitness, buf, DecoderOptions::NONE);
-                decoder.set_ip(start_ip.as_u64());
+                decoder.set_ip(start_ip.to_umem() as u64);
                 Sigstate {
                     start_ip: *start_ip,
                     buf,

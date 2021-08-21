@@ -210,7 +210,7 @@ pub fn run<T: Process + MemoryView + VirtualTranslate + Clone>(process: T) -> Re
                         .filter(|(_, v)| {
                             if let Some(a) = filter_addr {
                                 if let Some((s, _)) = v.first() {
-                                    s.as_u64() == a
+                                    s.to_umem() == a as umem
                                 } else {
                                     false
                                 }

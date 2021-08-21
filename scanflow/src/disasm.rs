@@ -73,15 +73,15 @@ impl Disasm {
                             let mut process = unsafe { ctx.get() };
                             let mut bytes = unsafe { ctx_bytes.get() };
 
-                            let start = m.base.as_u64() + section.VirtualAddress as u64;
-                            let end = start + section.VirtualSize as u64;
+                            let start = m.base.to_umem() + section.VirtualAddress as umem;
+                            let end = start + section.VirtualSize as umem;
 
                             let mut addr = start;
 
                             (addr..end)
                                 .step_by(CHUNK_SIZE)
                                 .filter_map(|_| {
-                                    let end = std::cmp::min(end, addr + CHUNK_SIZE as u64);
+                                    let end = std::cmp::min(end, addr + CHUNK_SIZE as umem);
                                     process
                                         .read_raw_into(addr.into(), &mut bytes)
                                         .data_part()
@@ -95,15 +95,15 @@ impl Disasm {
                                         DecoderOptions::NONE,
                                     );
 
-                                    decoder.set_ip(addr);
+                                    decoder.set_ip(addr as u64);
 
-                                    addr += CHUNK_SIZE as u64;
+                                    addr += CHUNK_SIZE as umem;
 
                                     Some(
                                         decoder
                                             .into_iter()
-                                            .filter(|i| i.ip() < end) // we do not overflow the limit
-                                            .inspect(|i| addr = i.ip() + i.len() as u64) // sets addr to next instruction addr
+                                            .filter(|i| (i.ip() as umem) < end) // we do not overflow the limit
+                                            .inspect(|i| addr = (i.ip() as umem) + i.len() as umem) // sets addr to next instruction addr
                                             .filter(|i| i.is_ip_rel_memory_operand()) // uses IP relative memory
                                             .filter(|i| i.near_branch_target() == 0) // is not a branch (call/jump)
                                             .map(|i| {

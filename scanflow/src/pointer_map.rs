@@ -40,8 +40,8 @@ impl PointerMap {
         self.reset();
 
         // TODO: replace with VAD
-        let mut mem_map =
-            proc.virt_page_map_range_vec(size::mb(16), Address::null(), (1u64 << 47).into());
+        let mem_map =
+            proc.virt_page_map_range_vec(mem::mb(16), Address::null(), ((1 as umem) << 47).into());
 
         let pb = PBar::new(
             mem_map
@@ -59,8 +59,9 @@ impl PointerMap {
                 .par_iter()
                 .flat_map(|&MemoryRange { address, size }| {
                     (0..size)
-                        .into_par_iter()
+                        .into_iter()
                         .step_by(0x1000)
+                        .par_bridge()
                         .filter_map(|off| {
                             let mut mem = unsafe { ctx.get() };
                             let mut buf = unsafe { ctx_buf.get() };
@@ -144,8 +145,8 @@ impl PointerMap {
         pb: &PBar,
         (pb_start, pb_end): (f32, f32),
     ) {
-        let min = Address::from(addr.as_u64().saturating_sub(urange as _));
-        let max = Address::from(addr.as_u64().saturating_add(lrange as _));
+        let min = Address::from(addr.to_umem().saturating_sub(urange as _));
+        let max = Address::from(addr.to_umem().saturating_add(lrange as _));
 
         // Find the lower bound
         let idx = startpoints.binary_search(&min).unwrap_or_else(|x| x);
@@ -287,8 +288,8 @@ impl PointerMap {
 }
 
 pub fn signed_diff(a: Address, b: Address) -> isize {
-    a.as_u64()
-        .checked_sub(b.as_u64())
+    a.to_umem()
+        .checked_sub(b.to_umem())
         .map(|a| a as isize)
         .unwrap_or_else(|| -((b - a) as isize))
 }

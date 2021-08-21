@@ -1,4 +1,5 @@
 use crate::pbar::PBar;
+use memflow::mem::virt_translate::MemoryRange;
 use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
@@ -40,8 +41,11 @@ impl ValueScanner {
         data: &[u8],
     ) -> Result<()> {
         if !self.scanned {
-            self.mem_map =
-                proc.virt_page_map_range_vec(size::mb(16), Address::null(), (1u64 << 47).into());
+            self.mem_map = proc.virt_page_map_range_vec(
+                mem::mb(16),
+                Address::null(),
+                ((1 as umem) << 47).into(),
+            );
 
             let pb = PBar::new(
                 self.mem_map
@@ -57,8 +61,9 @@ impl ValueScanner {
             self.matches.par_extend(self.mem_map.par_iter().flat_map(
                 |&MemoryRange { address, size }| {
                     (0..size)
-                        .into_par_iter()
+                        .into_iter()
                         .step_by(0x1000)
+                        .par_bridge()
                         .filter_map(|off| {
                             let mut mem = unsafe { ctx.get() };
                             let mut buf = unsafe { ctx_buf.get() };
