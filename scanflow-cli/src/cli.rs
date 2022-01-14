@@ -84,7 +84,7 @@ impl<'a, T> CliCmd<T> for CmdDef<'a, T> {
 /// # Arguments
 ///
 /// * `process` - target process
-pub fn run<T: Process + MemoryView + VirtualTranslate + Clone>(process: T) -> Result<()> {
+pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
     let mut ctx = CliCtx::new(process);
 
     let mut cmds = [

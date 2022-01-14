@@ -2,7 +2,6 @@ use memflow::prelude::v1::*;
 
 use crate::pbar::PBar;
 use iced_x86::{Decoder, DecoderOptions};
-use pelite::PeFile;
 
 use std::collections::BTreeMap;
 
@@ -42,8 +41,8 @@ impl Disasm {
         const CHUNK_SIZE: usize = size::mb(2);
 
         let ctx = ThreadLocalCtx::new_locked(move || process.clone());
-        let ctx_image = ThreadLocalCtx::new(|| vec![0; size::kb(128)]);
         let ctx_bytes = ThreadLocalCtx::new(|| vec![0; CHUNK_SIZE + 32]);
+        let sections = ThreadLocalCtx::new(|| Vec::<SectionInfo>::new());
 
         let pb = PBar::new(modules.iter().map(|m| m.size as u64).sum::<u64>(), true);
 
@@ -52,29 +51,26 @@ impl Disasm {
                 .into_par_iter()
                 .filter_map(|m| {
                     let mut process = unsafe { ctx.get() };
-                    let mut image = unsafe { ctx_image.get() };
+                    let mut sections = unsafe { sections.get() };
 
-                    process.read_raw_into(m.base, &mut image).data_part().ok()?;
+                    sections.clear();
+
+                    process
+                        .module_section_list_callback(&m, (&mut *sections).into())
+                        .ok()?;
 
                     std::mem::drop(process);
 
-                    let pefile = PeFile::from_bytes(image.as_slice())
-                        .map_err(|_| ErrorKind::InvalidExeFile)
-                        .ok()?;
-
-                    const IMAGE_SCN_CNT_CODE: u32 = 0x20;
-
-                    let ret = pefile
-                        .section_headers()
+                    let ret = sections
                         .iter()
-                        .filter(|s| (s.Characteristics & IMAGE_SCN_CNT_CODE) != 0)
+                        .filter(|s| s.name.as_ref() == ".text")
                         .par_bridge()
                         .flat_map(|section| {
                             let mut process = unsafe { ctx.get() };
                             let mut bytes = unsafe { ctx_bytes.get() };
 
-                            let start = m.base.to_umem() + section.VirtualAddress as umem;
-                            let end = start + section.VirtualSize as umem;
+                            let start = section.base.to_umem();
+                            let end = start + section.size;
 
                             let mut addr = start;
 

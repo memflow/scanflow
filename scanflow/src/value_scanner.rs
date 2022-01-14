@@ -1,5 +1,4 @@
 use crate::pbar::PBar;
-use memflow::mem::virt_translate::MemoryRange;
 use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
@@ -37,12 +36,12 @@ impl ValueScanner {
     /// * `data` - data to scan or filter against
     pub fn scan_for(
         &mut self,
-        proc: &mut (impl Process + MemoryView + VirtualTranslate + Clone),
+        proc: &mut (impl Process + MemoryView + Clone),
         data: &[u8],
     ) -> Result<()> {
         if !self.scanned {
-            self.mem_map = proc.virt_page_map_range_vec(
-                mem::mb(16),
+            self.mem_map = proc.mapped_mem_range_vec(
+                mem::mb(16) as _,
                 Address::null(),
                 ((1 as umem) << 47).into(),
             );
@@ -50,7 +49,7 @@ impl ValueScanner {
             let pb = PBar::new(
                 self.mem_map
                     .iter()
-                    .map(|MemoryRange { size, .. }| *size as u64)
+                    .map(|MemData(size, _)| size.to_umem() as u64)
                     .sum::<u64>(),
                 true,
             );
@@ -58,8 +57,8 @@ impl ValueScanner {
             let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + data.len() - 1]);
 
-            self.matches.par_extend(self.mem_map.par_iter().flat_map(
-                |&MemoryRange { address, size }| {
+            self.matches
+                .par_extend(self.mem_map.par_iter().flat_map(|&MemData(address, size)| {
                     (0..size)
                         .into_iter()
                         .step_by(0x1000)
@@ -92,8 +91,7 @@ impl ValueScanner {
                         .flatten()
                         .collect::<Vec<_>>()
                         .into_par_iter()
-                },
-            ));
+                }));
 
             self.scanned = true;
             pb.finish();

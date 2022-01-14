@@ -1,5 +1,4 @@
 use crate::pbar::PBar;
-use memflow::mem::virt_translate::MemoryRange;
 use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
@@ -34,19 +33,22 @@ impl PointerMap {
     /// * `size_addr` - size of a pointer (4 bytes on 32 bit machines, 8 bytes on 64 bit machines).
     pub fn create_map(
         &mut self,
-        proc: &mut (impl Process + MemoryView + VirtualTranslate + Clone),
+        proc: &mut (impl Process + MemoryView + Clone),
         size_addr: usize,
     ) -> Result<()> {
         self.reset();
 
         // TODO: replace with VAD
-        let mem_map =
-            proc.virt_page_map_range_vec(mem::mb(16), Address::null(), ((1 as umem) << 47).into());
+        let mem_map = proc.mapped_mem_range_vec(
+            mem::mb(16) as _,
+            Address::null(),
+            ((1 as umem) << 47).into(),
+        );
 
         let pb = PBar::new(
             mem_map
                 .iter()
-                .map(|MemoryRange { size, .. }| *size as u64)
+                .map(|MemData(size, _)| size.to_umem() as u64)
                 .sum::<u64>(),
             true,
         );
@@ -54,35 +56,33 @@ impl PointerMap {
         let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
         let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + size_addr - 1]);
 
-        self.map.par_extend(
-            mem_map
-                .par_iter()
-                .flat_map(|&MemoryRange { address, size }| {
-                    (0..size)
-                        .into_iter()
-                        .step_by(0x1000)
-                        .par_bridge()
-                        .filter_map(|off| {
-                            let mut mem = unsafe { ctx.get() };
-                            let mut buf = unsafe { ctx_buf.get() };
+        self.map
+            .par_extend(mem_map.par_iter().flat_map(|&MemData(address, size)| {
+                (0..size)
+                    .into_iter()
+                    .step_by(0x1000)
+                    .par_bridge()
+                    .filter_map(|off| {
+                        let mut mem = unsafe { ctx.get() };
+                        let mut buf = unsafe { ctx_buf.get() };
 
-                            mem.read_raw_into(address + off, buf.as_mut_slice())
-                                .data_part()
-                                .ok()?;
+                        mem.read_raw_into(address + off, buf.as_mut_slice())
+                            .data_part()
+                            .ok()?;
 
-                            pb.add(0x1000);
+                        pb.add(0x1000);
 
-                            let ret =
-                                buf.windows(size_addr)
-                                    .enumerate()
-                                    .filter_map(|(o, buf)| {
-                                        let address = address + off + o;
-                                        let mut arr = [0; 8];
-                                        // TODO: Fix for Big Endian
-                                        arr[0..buf.len()].copy_from_slice(buf);
-                                        let out_addr = Address::from(u64::from_le_bytes(arr));
-                                        if mem_map
-                                    .binary_search_by(|&MemoryRange{address: a, size: s}| {
+                        let ret = buf
+                            .windows(size_addr)
+                            .enumerate()
+                            .filter_map(|(o, buf)| {
+                                let address = address + off + o;
+                                let mut arr = [0; 8];
+                                // TODO: Fix for Big Endian
+                                arr[0..buf.len()].copy_from_slice(buf);
+                                let out_addr = Address::from(u64::from_le_bytes(arr));
+                                if mem_map
+                                    .binary_search_by(|&MemData(a, s)| {
                                         if out_addr >= a && out_addr < a + s {
                                             Ordering::Equal
                                         } else {
@@ -95,17 +95,16 @@ impl PointerMap {
                                 } else {
                                     None
                                 }
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .into_par_iter();
+                            })
+                            .collect::<Vec<_>>()
+                            .into_par_iter();
 
-                            Some(ret)
-                        })
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .into_par_iter()
-                }),
-        );
+                        Some(ret)
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
+            }));
 
         for (&k, &v) in &self.map {
             self.inverse_map.entry(v).or_default().push(k);

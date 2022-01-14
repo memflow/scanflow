@@ -1,7 +1,6 @@
 use memflow::prelude::v1::*;
 
 use iced_x86::{Code, ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
-use pelite::PeFile;
 
 use crate::disasm::Disasm;
 
@@ -97,7 +96,7 @@ impl Sigmaker {
     fn has_unique_matches(
         states: &[Sigstate],
         mem: &mut impl MemoryView,
-        ranges: &[(Address, usize)],
+        ranges: &[(Address, umem)],
         out: &mut Vec<String>,
     ) -> Result<bool> {
         let mut sigs: Vec<_> = states
@@ -174,25 +173,18 @@ impl Sigmaker {
             .find(|m| m.base <= target_global && m.base + m.size > target_global)
             .ok_or(ErrorKind::ModuleNotFound)?;
 
-        let mut image = vec![0; size::kb(128)];
+        let mut ranges = vec![];
 
-        process.read_raw_into(module.base, &mut image).data_part()?;
-
-        let pefile = PeFile::from_bytes(&image).map_err(|_| ErrorKind::InvalidExeFile)?;
-
-        const IMAGE_SCN_CNT_CODE: u32 = 0x20;
-
-        let ranges: Vec<(Address, usize)> = pefile
-            .section_headers()
-            .iter()
-            .filter(|s| (s.Characteristics & IMAGE_SCN_CNT_CODE) != 0)
-            .map(|s| {
-                (
-                    module.base + s.VirtualAddress as usize,
-                    s.VirtualSize as usize,
-                )
+        process.module_section_list_callback(
+            &module,
+            (&mut |s: SectionInfo| {
+                if s.name.as_ref() == ".text" {
+                    ranges.push((s.base, s.size));
+                }
+                true
             })
-            .collect();
+                .into(),
+        )?;
 
         let mut bufs: Vec<(Address, [u8; MAX_SIG_LENGTH])> =
             addrs.iter().map(|&a| (a, [0; MAX_SIG_LENGTH])).collect();

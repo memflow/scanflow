@@ -16,5 +16,5 @@ memflow = { git = "https://github.com/memflow/memflow.git", branch = "next" }
 simplelog = "0.8.0"
 scan_fmt = "0.2.5"
 scanflow = { version = "0.1", path = "../scanflow", features = ["progress_bar"] }
-clap = "2.33"
+clap = { version = "3", features = ["cargo"] }
 log = "0.4"
