@@ -15,7 +15,10 @@ fn main() -> Result<()> {
     let (chain, target, elevate, level) = extract_args(&matches)?;
 
     if elevate {
+        #[cfg(unix)]
         sudo::escalate_if_needed().expect("failed to elevate privileges");
+        #[cfg(windows)]
+        log::warn!("elevation not supported on windows!");
     }
 
     TermLogger::init(

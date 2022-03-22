@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "scanflow"
-version = "0.1.1"
+version = "0.2.0-beta1"
 dependencies = [
  "iced-x86",
  "memflow",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "scanflow-cli"
-version = "0.1.2"
+version = "0.2.0-beta2"
 dependencies = [
  "clap",
  "log",
