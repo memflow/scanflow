@@ -1,10 +1,7 @@
-use memflow::connector::{inventory::ConnectorInventory, ConnectorArgs};
-
 use clap::*;
 use log::Level;
 
-use memflow_win32::win32::{Kernel, Win32Process};
-use memflow_win32::Result;
+use memflow::prelude::v1::{Result, *};
 
 use simplelog::{Config, TermLogger, TerminalMode};
 
@@ -14,7 +11,12 @@ extern crate scan_fmt;
 mod cli;
 
 fn main() -> Result<()> {
-    let (target, conn, args, level) = parse_args()?;
+    let matches = parse_args();
+    let (chain, target, elevate, level) = extract_args(&matches)?;
+
+    if elevate {
+        sudo::escalate_if_needed().expect("failed to elevate privileges");
+    }
 
     TermLogger::init(
         level.to_level_filter(),
@@ -23,46 +25,47 @@ fn main() -> Result<()> {
     )
     .unwrap();
 
-    let inventory = unsafe { ConnectorInventory::scan() };
-    let connector = unsafe { inventory.create_connector(&conn, &args)? };
+    let inventory = Inventory::scan();
 
-    let mut kernel = Kernel::builder(connector).build_default_caches().build()?;
+    let os = inventory.builder().os_chain(chain).build()?;
 
-    let process_info = kernel.process_info(&target)?;
-
-    let process = Win32Process::with_kernel(kernel, process_info);
+    let process = os.into_process_by_name(&target)?;
 
     cli::run(process)
 }
 
-fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
-    let matches = App::new("scanflow-cli")
+fn parse_args() -> ArgMatches {
+    Command::new("scanflow-cli")
         .version(crate_version!())
         .author(crate_authors!())
-        .arg(Arg::with_name("verbose").short("v").multiple(true))
+        .arg(Arg::new("verbose").short('v').multiple_occurrences(true))
         .arg(
-            Arg::with_name("connector")
+            Arg::new("connector")
                 .long("connector")
-                .short("c")
+                .short('c')
                 .takes_value(true)
-                .required(true),
+                .required(false)
+                .multiple_occurrences(true),
         )
         .arg(
-            Arg::with_name("conn-args")
-                .long("conn-args")
-                .short("x")
+            Arg::new("os")
+                .long("os")
+                .short('o')
                 .takes_value(true)
-                .default_value(""),
+                .required(true)
+                .multiple_occurrences(true),
         )
         .arg(
-            Arg::with_name("program")
-                .long("program")
-                .short("p")
-                .takes_value(true)
-                .required(true),
+            Arg::new("elevate")
+                .long("elevate")
+                .short('e')
+                .required(false),
         )
-        .get_matches();
+        .arg(Arg::new("program").takes_value(true).required(true))
+        .get_matches()
+}
 
+fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, bool, log::Level)> {
     // set log level
     let level = match matches.occurrences_of("verbose") {
         0 => Level::Error,
@@ -73,10 +76,24 @@ fn parse_args() -> Result<(String, String, ConnectorArgs, log::Level)> {
         _ => Level::Trace,
     };
 
+    let conn_iter = matches
+        .indices_of("connector")
+        .zip(matches.values_of("connector"))
+        .map(|(a, b)| a.zip(b))
+        .into_iter()
+        .flatten();
+
+    let os_iter = matches
+        .indices_of("os")
+        .zip(matches.values_of("os"))
+        .map(|(a, b)| a.zip(b))
+        .into_iter()
+        .flatten();
+
     Ok((
-        matches.value_of("program").unwrap_or("").into(),
-        matches.value_of("connector").unwrap_or("").into(),
-        ConnectorArgs::parse(matches.value_of("conn-args").unwrap())?,
+        OsChain::new(conn_iter, os_iter)?,
+        matches.value_of("program").unwrap_or(""),
+        matches.occurrences_of("elevate") > 0,
         level,
     ))
 }

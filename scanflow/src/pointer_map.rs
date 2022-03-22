@@ -1,7 +1,5 @@
 use crate::pbar::PBar;
-use memflow::error::*;
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
+use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
 use std::cmp::Ordering;
@@ -35,31 +33,40 @@ impl PointerMap {
     /// * `size_addr` - size of a pointer (4 bytes on 32 bit machines, 8 bytes on 64 bit machines).
     pub fn create_map(
         &mut self,
-        mem: &mut (impl VirtualMemory + Clone),
+        proc: &mut (impl Process + MemoryView + Clone),
         size_addr: usize,
     ) -> Result<()> {
         self.reset();
 
-        let mem_map = mem.virt_page_map_range(size::mb(16), Address::null(), (1u64 << 47).into());
+        // TODO: replace with VAD
+        let mem_map = proc.mapped_mem_range_vec(
+            mem::mb(16) as _,
+            Address::null(),
+            ((1 as umem) << 47).into(),
+        );
 
         let pb = PBar::new(
-            mem_map.iter().map(|(_, size)| *size as u64).sum::<u64>(),
+            mem_map
+                .iter()
+                .map(|CTup3(_, size, _)| size.to_umem() as u64)
+                .sum::<u64>(),
             true,
         );
 
-        let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+        let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
         let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + size_addr - 1]);
 
         self.map
-            .par_extend(mem_map.par_iter().flat_map(|&(addr, size)| {
+            .par_extend(mem_map.par_iter().flat_map(|&CTup3(address, size, _)| {
                 (0..size)
-                    .into_par_iter()
+                    .into_iter()
                     .step_by(0x1000)
+                    .par_bridge()
                     .filter_map(|off| {
                         let mut mem = unsafe { ctx.get() };
                         let mut buf = unsafe { ctx_buf.get() };
 
-                        mem.virt_read_raw_into(addr + off, buf.as_mut_slice())
+                        mem.read_raw_into(address + off, buf.as_mut_slice())
                             .data_part()
                             .ok()?;
 
@@ -69,13 +76,13 @@ impl PointerMap {
                             .windows(size_addr)
                             .enumerate()
                             .filter_map(|(o, buf)| {
-                                let addr = addr + off + o;
+                                let address = address + off + o;
                                 let mut arr = [0; 8];
                                 // TODO: Fix for Big Endian
                                 arr[0..buf.len()].copy_from_slice(buf);
                                 let out_addr = Address::from(u64::from_le_bytes(arr));
                                 if mem_map
-                                    .binary_search_by(|&(a, s)| {
+                                    .binary_search_by(|&CTup3(a, s, _)| {
                                         if out_addr >= a && out_addr < a + s {
                                             Ordering::Equal
                                         } else {
@@ -84,7 +91,7 @@ impl PointerMap {
                                     })
                                     .is_ok()
                                 {
-                                    Some((addr, out_addr))
+                                    Some((address, out_addr))
                                 } else {
                                     None
                                 }
@@ -137,8 +144,8 @@ impl PointerMap {
         pb: &PBar,
         (pb_start, pb_end): (f32, f32),
     ) {
-        let min = Address::from(addr.as_u64().saturating_sub(urange as _));
-        let max = Address::from(addr.as_u64().saturating_add(lrange as _));
+        let min = Address::from(addr.to_umem().saturating_sub(urange as _));
+        let max = Address::from(addr.to_umem().saturating_add(lrange as _));
 
         // Find the lower bound
         let idx = startpoints.binary_search(&min).unwrap_or_else(|x| x);
@@ -280,8 +287,8 @@ impl PointerMap {
 }
 
 pub fn signed_diff(a: Address, b: Address) -> isize {
-    a.as_u64()
-        .checked_sub(b.as_u64())
+    a.to_umem()
+        .checked_sub(b.to_umem())
         .map(|a| a as isize)
         .unwrap_or_else(|| -((b - a) as isize))
 }

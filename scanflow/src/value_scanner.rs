@@ -1,7 +1,5 @@
 use crate::pbar::PBar;
-use memflow::error::*;
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
+use memflow::prelude::v1::*;
 use rayon::prelude::*;
 use rayon_tlsctx::ThreadLocalCtx;
 
@@ -16,7 +14,7 @@ use rayon_tlsctx::ThreadLocalCtx;
 pub struct ValueScanner {
     scanned: bool,
     matches: Vec<Address>,
-    mem_map: Vec<(Address, usize)>,
+    mem_map: Vec<MemoryRange>,
 }
 
 impl ValueScanner {
@@ -36,32 +34,40 @@ impl ValueScanner {
     ///
     /// * `mem` - memory object to scan for values in
     /// * `data` - data to scan or filter against
-    pub fn scan_for(&mut self, mem: &mut (impl VirtualMemory + Clone), data: &[u8]) -> Result<()> {
+    pub fn scan_for(
+        &mut self,
+        proc: &mut (impl Process + MemoryView + Clone),
+        data: &[u8],
+    ) -> Result<()> {
         if !self.scanned {
-            self.mem_map =
-                mem.virt_page_map_range(size::mb(16), Address::null(), (1u64 << 47).into());
+            self.mem_map = proc.mapped_mem_range_vec(
+                mem::mb(16) as _,
+                Address::null(),
+                ((1 as umem) << 47).into(),
+            );
 
             let pb = PBar::new(
                 self.mem_map
                     .iter()
-                    .map(|(_, size)| *size as u64)
+                    .map(|CTup3(size, _, _)| size.to_umem() as u64)
                     .sum::<u64>(),
                 true,
             );
 
-            let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+            let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + data.len() - 1]);
 
-            self.matches
-                .par_extend(self.mem_map.par_iter().flat_map(|&(addr, size)| {
+            self.matches.par_extend(self.mem_map.par_iter().flat_map(
+                |&CTup3(address, size, _)| {
                     (0..size)
-                        .into_par_iter()
+                        .into_iter()
                         .step_by(0x1000)
+                        .par_bridge()
                         .filter_map(|off| {
                             let mut mem = unsafe { ctx.get() };
                             let mut buf = unsafe { ctx_buf.get() };
 
-                            mem.virt_read_raw_into(addr + off, buf.as_mut_slice())
+                            mem.read_raw_into(address + off, buf.as_mut_slice())
                                 .data_part()
                                 .ok()?;
 
@@ -72,7 +78,7 @@ impl ValueScanner {
                                 .enumerate()
                                 .filter_map(|(o, buf)| {
                                     if buf == data {
-                                        Some(addr + off + o)
+                                        Some(address + off + o)
                                     } else {
                                         None
                                     }
@@ -85,7 +91,8 @@ impl ValueScanner {
                         .flatten()
                         .collect::<Vec<_>>()
                         .into_par_iter()
-                }));
+                },
+            ));
 
             self.scanned = true;
             pb.finish();
@@ -96,7 +103,7 @@ impl ValueScanner {
 
             let pb = PBar::new(old_matches.len() as u64, false);
 
-            let ctx = ThreadLocalCtx::new_locked(move || mem.clone());
+            let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; CHUNK_SIZE * data.len()]);
 
             self.matches
@@ -105,7 +112,7 @@ impl ValueScanner {
                     let mut buf = unsafe { ctx_buf.get() };
 
                     if !data.is_empty() {
-                        let mut batcher = mem.virt_batcher();
+                        let mut batcher = mem.batcher();
 
                         for (&a, buf) in chunk.iter().zip(buf.chunks_mut(data.len())) {
                             batcher.read_raw_into(a, buf);
@@ -135,5 +142,9 @@ impl ValueScanner {
 
     pub fn matches(&self) -> &Vec<Address> {
         &self.matches
+    }
+
+    pub fn matches_mut(&mut self) -> &mut Vec<Address> {
+        &mut self.matches
     }
 }

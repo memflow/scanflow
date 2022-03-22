@@ -1,8 +1,5 @@
 use memflow::prelude::v1::*;
 
-use memflow_win32::win32::Win32Process;
-use memflow_win32::{Error, Result};
-
 use std::convert::TryInto;
 use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
@@ -17,7 +14,7 @@ pub const MAX_PRINT: usize = 16;
 
 /// Scanflow CLI context.
 pub struct CliCtx<T> {
-    process: Win32Process<T>,
+    process: T,
     value_scanner: ValueScanner,
     typename: Option<String>,
     buf_len: usize,
@@ -26,7 +23,7 @@ pub struct CliCtx<T> {
 }
 
 impl<T> CliCtx<T> {
-    fn new(process: Win32Process<T>) -> Self {
+    fn new(process: T) -> Self {
         Self {
             process,
             value_scanner: Default::default(),
@@ -87,31 +84,63 @@ impl<'a, T> CliCmd<T> for CmdDef<'a, T> {
 /// # Arguments
 ///
 /// * `process` - target process
-pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
+pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
     let mut ctx = CliCtx::new(process);
 
     let mut cmds = [
-        CmdDef::new("reset", "r", |_, ctx| {
+        CmdDef::<T>::new("reset", "r", |_, ctx| {
             ctx.value_scanner.reset();
             ctx.disasm.reset();
             ctx.pointer_map.reset();
             ctx.typename = None;
             Ok(())
         }, "reset all context state"),
+        CmdDef::<T>::new("reinterpret", "ri", |arg, ctx| {
+
+            let mut split = arg.split_whitespace();
+
+            let (arg, len) = (split.next().ok_or(ErrorKind::InvalidArgument)?.to_string(), split.next());
+
+            if let Some(Type(_, size, _, _)) = TYPES.iter().filter(|Type(name, _, _, _)| name == &arg).next() {
+                ctx.typename = Some(arg);
+
+                if let Some(size) = size {
+                    ctx.buf_len = *size;
+                } else {
+                    ctx.buf_len = len.and_then(|len| len.parse().ok()).ok_or(ErrorKind::InvalidArgument)?;
+                }
+
+                Ok(())
+            } else {
+                Err(ErrorKind::InvalidArgument.into())
+            }
+
+        }, "reinterpret matches as another type. Usage: {{type}} ({{unsized len}})"),
+        CmdDef::<T>::new("add", "a", |arg, ctx| {
+            let addr = u64::from_str_radix(arg, 16).map_err(|_| ErrorKind::InvalidArgument)?;
+            ctx.value_scanner.matches_mut().push(addr.into());
+            Ok(())
+        }, "manually add an address to matches"),
+        CmdDef::<T>::new("remove", "rm", |arg, ctx| {
+            let idx = arg.parse::<usize>().map_err(|_| ErrorKind::InvalidArgument)?;
+            ctx.value_scanner.matches_mut().remove(idx);
+            Ok(())
+        }, "remove match by index"),
         CmdDef::new("print", "p", |_, ctx| { 
             if let Some(t) = &ctx.typename {
-                print_matches(&ctx.value_scanner, &mut ctx.process.virt_mem, ctx.buf_len, t)
+                print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, t)
             } else {
-                Err(Error::Other("Perform a scan first!"))
+                Err(ErrorKind::Uninitialized.into())
             }
         }, "print found matches after initial scan"),
         CmdDef::new("pointer_map", "pm", |_, ctx| {
+            let size_addr = ArchitectureObj::from(ctx.process.info().proc_arch).size_addr();
+
             ctx.pointer_map.reset();
             ctx.pointer_map.create_map(
-                &mut ctx.process.virt_mem,
-                ctx.process.proc_info.proc_arch.size_addr(),
-            )?;
-            Ok(())
+                &mut ctx.process,
+                size_addr,
+            )
         }, "build a pointer map"),
         CmdDef::new("globals", "g", |_, ctx| {
             ctx.disasm.reset();
@@ -132,7 +161,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                     Err(e) => Err(e),
                 }
             } else {
-                Err(Error::Other("Invalid usage"))
+                Err(ErrorKind::ArgValidation.into())
             }
         }, "build a pointer map. args: {addr}"),
         CmdDef::new("offset_scan", "os", |args, ctx| {
@@ -140,9 +169,10 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 scan_fmt_some!(args, "{} {} {} {} {x}", String, usize, usize, usize, [hex u64])
             {
                 if ctx.pointer_map.map().is_empty() {
+                    let size_addr = ArchitectureObj::from(ctx.process.info().proc_arch).size_addr();
                     ctx.pointer_map.create_map(
-                        &mut ctx.process.virt_mem,
-                        ctx.process.proc_info.proc_arch.size_addr(),
+                        &mut ctx.process,
+                        size_addr
                     )?;
                 }
 
@@ -180,7 +210,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                         .filter(|(_, v)| {
                             if let Some(a) = filter_addr {
                                 if let Some((s, _)) = v.first() {
-                                    s.as_u64() == a
+                                    s.to_umem() == a as umem
                                 } else {
                                     false
                                 }
@@ -198,7 +228,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
 
                 Ok(())
             } else {
-                Err(Error::Other("Invalid usage"))
+                Err(ErrorKind::InvalidArgument.into())
             }
         }, "scan for offsets to matches. Arguments: {y/[n]} {lower range} {upper range} {max depth} ({filter})"),
         CmdDef::new("write", "wr", |args, ctx| {
@@ -206,7 +236,7 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 args,
                 &ctx.typename,
                 ctx.value_scanner.matches(),
-                &mut ctx.process.virt_mem,
+                &mut ctx.process,
             )
         }, "write values to select matches. Arguments: {idx/*} {o/c} {value}"),
         ];
@@ -216,11 +246,11 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
             print!("[{}] ", tn)
         }
 
-        print!("scanflow@{} >> ", ctx.process.proc_info.name);
+        print!("scanflow@{} >> ", ctx.process.info().name);
 
         std::io::stdout().flush().ok();
 
-        let line = get_line().map_err(|_| Error::Other("Failed to get line"))?;
+        let line = get_line().map_err(|_| ErrorKind::UnableToReadFile)?;
 
         let line = line.trim();
 
@@ -263,14 +293,8 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
                 } else {
                     if let Some((buf, t)) = parse_input(line, &ctx.typename) {
                         ctx.buf_len = buf.len();
-                        ctx.value_scanner
-                            .scan_for(&mut ctx.process.virt_mem, &buf)?;
-                        print_matches(
-                            &ctx.value_scanner,
-                            &mut ctx.process.virt_mem,
-                            ctx.buf_len,
-                            &t,
-                        )?;
+                        ctx.value_scanner.scan_for(&mut ctx.process, &buf)?;
+                        print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, &t)?;
                         ctx.typename = Some(t);
                     } else {
                         println!("Invalid input! Use `help` for command reference.");
@@ -283,9 +307,9 @@ pub fn run(process: Win32Process<impl VirtualMemory + Clone>) -> Result<()> {
     Ok(())
 }
 
-pub fn print_matches<V: VirtualMemory>(
+pub fn print_matches(
     value_scanner: &ValueScanner,
-    virt_mem: &mut V,
+    mem: &mut impl MemoryView,
     buf_len: usize,
     typename: &str,
 ) -> Result<()> {
@@ -293,11 +317,11 @@ pub fn print_matches<V: VirtualMemory>(
 
     for &m in value_scanner.matches().iter().take(MAX_PRINT) {
         let mut buf = vec![0; buf_len];
-        virt_mem.virt_read_raw_into(m, &mut buf).data_part()?;
+        mem.read_raw_into(m, &mut buf).data_part()?;
         println!(
             "{:x}: {}",
             m,
-            print_value(&buf, typename).ok_or(Error::Other("Failed to parse type"))?
+            print_value(&buf, typename).ok_or(ErrorKind::InvalidArgument)?
         );
     }
 
@@ -319,13 +343,13 @@ pub fn write_value(
     args: &str,
     typename: &Option<String>,
     matches: &[Address],
-    mut virt_mem: impl VirtualMemory,
+    mem: &mut impl MemoryView,
 ) -> Result<()> {
     if matches.is_empty() {
-        return Err(Error::Other("no matches found!"));
+        return Err(ErrorKind::Uninitialized.into());
     }
 
-    let usage = Error::Other("Invalid usage");
+    let usage: Error = ErrorKind::ArgValidation.into();
     let mut words = args.splitn(3, " ");
     let (idx, mode, value) = (
         words.next().ok_or(usage)?,
@@ -338,7 +362,7 @@ pub fn write_value(
     } else {
         (
             idx.parse::<usize>()
-                .map_err(|_| Error::Other("failed to parse index!"))?,
+                .map_err(|_| ErrorKind::InvalidArgument)?,
             1,
         )
     };
@@ -346,16 +370,16 @@ pub fn write_value(
     let gl = match mode {
         "o" => Ok(None),
         "c" => Ok(Some(async_get_line())),
-        _ => Err(Error::Other("failed to parse mode!")),
+        _ => Err(ErrorKind::InvalidArgument),
     }?;
 
-    let (v, _) = parse_input(value, typename).ok_or(Error::Other("failed to parse value!"))?;
+    let (v, _) = parse_input(value, typename).ok_or(ErrorKind::InvalidArgument)?;
 
     println!("Write to matches {}-{}", skip, skip + take - 1);
 
     loop {
         for &m in matches.iter().skip(skip).take(take) {
-            virt_mem.virt_write_raw(m, v.as_ref()).data_part()?;
+            mem.write_raw(m, v.as_ref()).data_part()?;
         }
 
         if let Some(try_get_line) = &gl {
@@ -375,31 +399,117 @@ pub fn write_value(
     Ok(())
 }
 
-pub fn print_value(buf: &[u8], typename: &str) -> Option<String> {
-    match typename {
-        "str" => Some(String::from_utf8_lossy(buf).to_string()),
-        "str_utf16" => {
+type PrintFn = fn(&[u8]) -> Option<String>;
+type ParseFn = fn(&str) -> Option<Box<[u8]>>;
+
+pub struct Type(&'static str, Option<usize>, PrintFn, ParseFn);
+
+const TYPES: &[Type] = &[
+    Type(
+        "str",
+        None,
+        |buf| Some(String::from_utf8_lossy(buf).to_string()),
+        |value| Some(Box::from(value.as_bytes())),
+    ),
+    Type(
+        "str_utf16",
+        None,
+        |buf| {
             let mut vec = vec![];
             for w in buf.chunks_exact(2) {
                 let s = u16::from_ne_bytes(w.try_into().unwrap());
                 vec.push(s);
             }
             Some(format!("{}", String::from_utf16_lossy(&vec)))
-        }
-        "i128" => Some(format!("{}", i128::from_ne_bytes(buf.try_into().ok()?))),
-        "i64" => Some(format!("{}", i64::from_ne_bytes(buf.try_into().ok()?))),
-        "i32" => Some(format!("{}", i32::from_ne_bytes(buf.try_into().ok()?))),
-        "i16" => Some(format!("{}", i16::from_ne_bytes(buf.try_into().ok()?))),
-        "i8" => Some(format!("{}", i8::from_ne_bytes(buf.try_into().ok()?))),
-        "u128" => Some(format!("{}", u128::from_ne_bytes(buf.try_into().ok()?))),
-        "u64" => Some(format!("{}", u64::from_ne_bytes(buf.try_into().ok()?))),
-        "u32" => Some(format!("{}", u32::from_ne_bytes(buf.try_into().ok()?))),
-        "u16" => Some(format!("{}", u16::from_ne_bytes(buf.try_into().ok()?))),
-        "u8" => Some(format!("{}", u8::from_ne_bytes(buf.try_into().ok()?))),
-        "f64" => Some(format!("{}", f64::from_ne_bytes(buf.try_into().ok()?))),
-        "f32" => Some(format!("{}", f32::from_ne_bytes(buf.try_into().ok()?))),
-        _ => None,
-    }
+        },
+        |value| {
+            let mut out = vec![];
+            for v in value.encode_utf16() {
+                out.extend(v.to_ne_bytes().iter().copied());
+            }
+            Some(out.into_boxed_slice())
+        },
+    ),
+    Type(
+        "i128",
+        Some(16),
+        |buf| Some(format!("{}", i128::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i128>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i64",
+        Some(8),
+        |buf| Some(format!("{}", i64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i32",
+        Some(4),
+        |buf| Some(format!("{}", i32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i32>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i16",
+        Some(2),
+        |buf| Some(format!("{}", i16::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i16>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "i8",
+        Some(1),
+        |buf| Some(format!("{}", i8::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<i8>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u128",
+        Some(16),
+        |buf| Some(format!("{}", u128::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u128>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u64",
+        Some(8),
+        |buf| Some(format!("{}", u64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u32",
+        Some(4),
+        |buf| Some(format!("{}", u32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u32>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u16",
+        Some(2),
+        |buf| Some(format!("{}", u16::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u16>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "u8",
+        Some(1),
+        |buf| Some(format!("{}", u8::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<u8>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "f64",
+        Some(4),
+        |buf| Some(format!("{}", f64::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<f64>().ok()?.to_ne_bytes())),
+    ),
+    Type(
+        "f32",
+        Some(4),
+        |buf| Some(format!("{}", f32::from_ne_bytes(buf.try_into().ok()?))),
+        |value| Some(Box::from(value.parse::<f32>().ok()?.to_ne_bytes())),
+    ),
+];
+
+pub fn print_value(buf: &[u8], typename: &str) -> Option<String> {
+    TYPES
+        .iter()
+        .filter(|Type(name, _, _, _)| name == &typename)
+        .next()
+        .and_then(|Type(_, _, pfn, _)| pfn(buf))
 }
 
 pub fn parse_input(input: &str, opt_typename: &Option<String>) -> Option<(Box<[u8]>, String)> {
@@ -410,28 +520,11 @@ pub fn parse_input(input: &str, opt_typename: &Option<String>) -> Option<(Box<[u
         (words.next()?, words.next()?)
     };
 
-    let b = match typename {
-        "str" => Some(Box::from(value.as_bytes())),
-        "str_utf16" => {
-            let mut out = vec![];
-            for v in value.encode_utf16() {
-                out.extend(v.to_ne_bytes().iter().copied());
-            }
-            Some(out.into_boxed_slice())
-        }
-        "i128" => Some(Box::from(value.parse::<i128>().ok()?.to_ne_bytes())),
-        "i64" => Some(Box::from(value.parse::<i64>().ok()?.to_ne_bytes())),
-        "i32" => Some(Box::from(value.parse::<i32>().ok()?.to_ne_bytes())),
-        "i16" => Some(Box::from(value.parse::<i16>().ok()?.to_ne_bytes())),
-        "i8" => Some(Box::from(value.parse::<i8>().ok()?.to_ne_bytes())),
-        "u128" => Some(Box::from(value.parse::<u128>().ok()?.to_ne_bytes())),
-        "u64" => Some(Box::from(value.parse::<u64>().ok()?.to_ne_bytes())),
-        "u32" => Some(Box::from(value.parse::<u32>().ok()?.to_ne_bytes())),
-        "u16" => Some(Box::from(value.parse::<u16>().ok()?.to_ne_bytes())),
-        "u8" => Some(Box::from(value.parse::<u8>().ok()?.to_ne_bytes())),
-        "f64" => Some(Box::from(value.parse::<f64>().ok()?.to_ne_bytes())),
-        "f32" => Some(Box::from(value.parse::<f32>().ok()?.to_ne_bytes())),
-        _ => None,
-    }?;
+    let b = TYPES
+        .iter()
+        .filter(|Type(name, _, _, _)| name == &typename)
+        .next()?
+        .3(value)?;
+
     Some((b, typename.to_string()))
 }

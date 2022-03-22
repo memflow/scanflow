@@ -1,11 +1,7 @@
-use memflow::mem::VirtualMemory;
-use memflow::types::{size, Address};
-use memflow_win32::error::*;
-use memflow_win32::win32::Win32Process;
+use memflow::prelude::v1::*;
 
 use crate::pbar::PBar;
 use iced_x86::{Decoder, DecoderOptions};
-use pelite::PeFile;
 
 use std::collections::BTreeMap;
 
@@ -37,7 +33,7 @@ impl Disasm {
     /// * `process` - target process to find the variables in
     pub fn collect_globals(
         &mut self,
-        process: &mut Win32Process<impl VirtualMemory + Clone>,
+        process: &mut (impl Process + MemoryView + Clone),
     ) -> Result<()> {
         self.reset();
         let modules = process.module_list()?;
@@ -45,8 +41,8 @@ impl Disasm {
         const CHUNK_SIZE: usize = size::mb(2);
 
         let ctx = ThreadLocalCtx::new_locked(move || process.clone());
-        let ctx_image = ThreadLocalCtx::new(|| vec![0; size::kb(128)]);
         let ctx_bytes = ThreadLocalCtx::new(|| vec![0; CHUNK_SIZE + 32]);
+        let sections = ThreadLocalCtx::new(|| Vec::<SectionInfo>::new());
 
         let pb = PBar::new(modules.iter().map(|m| m.size as u64).sum::<u64>(), true);
 
@@ -55,61 +51,55 @@ impl Disasm {
                 .into_par_iter()
                 .filter_map(|m| {
                     let mut process = unsafe { ctx.get() };
-                    let mut image = unsafe { ctx_image.get() };
+                    let mut sections = unsafe { sections.get() };
+
+                    sections.clear();
 
                     process
-                        .virt_mem
-                        .virt_read_raw_into(m.base, &mut image)
-                        .data_part()
+                        .module_section_list_callback(&m, (&mut *sections).into())
                         .ok()?;
 
                     std::mem::drop(process);
 
-                    let pefile = PeFile::from_bytes(image.as_slice())
-                        .map_err(|_| Error::Other("Failed to parse header"))
-                        .ok()?;
-
-                    const IMAGE_SCN_CNT_CODE: u32 = 0x20;
-
-                    let ret = pefile
-                        .section_headers()
+                    let ret = sections
                         .iter()
-                        .filter(|s| (s.Characteristics & IMAGE_SCN_CNT_CODE) != 0)
+                        .filter(|s| s.name.as_ref() == ".text")
                         .par_bridge()
                         .flat_map(|section| {
                             let mut process = unsafe { ctx.get() };
                             let mut bytes = unsafe { ctx_bytes.get() };
 
-                            let start = m.base.as_u64() + section.VirtualAddress as u64;
-                            let end = start + section.VirtualSize as u64;
+                            let start = section.base.to_umem();
+                            let end = start + section.size;
 
                             let mut addr = start;
 
                             (addr..end)
                                 .step_by(CHUNK_SIZE)
                                 .filter_map(|_| {
-                                    let end = std::cmp::min(end, addr + CHUNK_SIZE as u64);
+                                    let end = std::cmp::min(end, addr + CHUNK_SIZE as umem);
                                     process
-                                        .virt_mem
-                                        .virt_read_raw_into(addr.into(), &mut bytes)
+                                        .read_raw_into(addr.into(), &mut bytes)
                                         .data_part()
                                         .ok()?;
 
                                     let mut decoder = Decoder::new(
-                                        process.proc_info.proc_arch.bits().into(),
+                                        ArchitectureObj::from(process.info().proc_arch)
+                                            .bits()
+                                            .into(),
                                         &bytes,
                                         DecoderOptions::NONE,
                                     );
 
-                                    decoder.set_ip(addr);
+                                    decoder.set_ip(addr as u64);
 
-                                    addr += CHUNK_SIZE as u64;
+                                    addr += CHUNK_SIZE as umem;
 
                                     Some(
                                         decoder
                                             .into_iter()
-                                            .filter(|i| i.ip() < end) // we do not overflow the limit
-                                            .inspect(|i| addr = i.ip() + i.len() as u64) // sets addr to next instruction addr
+                                            .filter(|i| (i.ip() as umem) < end) // we do not overflow the limit
+                                            .inspect(|i| addr = (i.ip() as umem) + i.len() as umem) // sets addr to next instruction addr
                                             .filter(|i| i.is_ip_rel_memory_operand()) // uses IP relative memory
                                             .filter(|i| i.near_branch_target() == 0) // is not a branch (call/jump)
                                             .map(|i| {

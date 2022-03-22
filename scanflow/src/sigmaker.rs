@@ -1,10 +1,6 @@
-use memflow::mem::{VirtualMemory, VirtualReadData};
-use memflow::types::{size, Address};
-use memflow_win32::error::*;
-use memflow_win32::win32::Win32Process;
+use memflow::prelude::v1::*;
 
 use iced_x86::{Code, ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
-use pelite::PeFile;
 
 use crate::disasm::Disasm;
 
@@ -99,8 +95,8 @@ pub struct Sigmaker {}
 impl Sigmaker {
     fn has_unique_matches(
         states: &[Sigstate],
-        virt_mem: &mut impl VirtualMemory,
-        ranges: &[(Address, usize)],
+        mem: &mut impl MemoryView,
+        ranges: &[(Address, umem)],
         out: &mut Vec<String>,
     ) -> Result<bool> {
         let mut sigs: Vec<_> = states
@@ -114,9 +110,7 @@ impl Sigmaker {
         for &(addr, size) in ranges {
             for off in (0..size).step_by(CHUNK_SIZE) {
                 let addr = addr + off;
-                virt_mem
-                    .virt_read_raw_into(addr, buf.as_mut_slice())
-                    .data_part()?;
+                mem.read_raw_into(addr, buf.as_mut_slice()).data_part()?;
 
                 for (off, w) in buf.windows(MAX_SIG_LENGTH).enumerate() {
                     let addr = addr + off;
@@ -164,65 +158,53 @@ impl Sigmaker {
     /// * `disasm` - instance to disassembler state
     /// * `target_global` - target global variable to sig
     pub fn find_sigs(
-        process: &mut Win32Process<impl VirtualMemory>,
+        process: &mut (impl Process + MemoryView),
         disasm: &Disasm,
         target_global: Address,
     ) -> Result<Vec<String>> {
         let addrs = disasm
             .inverse_map()
             .get(&target_global)
-            .ok_or(Error::Other("Invalid global variable"))?;
+            .ok_or(ErrorKind::InvalidArgument)?;
 
         let module = process
             .module_list()?
             .into_iter()
             .find(|m| m.base <= target_global && m.base + m.size > target_global)
-            .ok_or(Error::Other("Could not find target module"))?;
+            .ok_or(ErrorKind::ModuleNotFound)?;
 
-        let mut image = vec![0; size::kb(128)];
+        let mut ranges = vec![];
 
-        process
-            .virt_mem
-            .virt_read_raw_into(module.base, &mut image)
-            .data_part()?;
-
-        let pefile =
-            PeFile::from_bytes(&image).map_err(|_| Error::Other("Failed to parse header"))?;
-
-        const IMAGE_SCN_CNT_CODE: u32 = 0x20;
-
-        let ranges: Vec<(Address, usize)> = pefile
-            .section_headers()
-            .iter()
-            .filter(|s| (s.Characteristics & IMAGE_SCN_CNT_CODE) != 0)
-            .map(|s| {
-                (
-                    module.base + s.VirtualAddress as usize,
-                    s.VirtualSize as usize,
-                )
+        process.module_section_list_callback(
+            &module,
+            (&mut |s: SectionInfo| {
+                if s.name.as_ref() == ".text" {
+                    ranges.push((s.base, s.size));
+                }
+                true
             })
-            .collect();
+                .into(),
+        )?;
 
         let mut bufs: Vec<(Address, [u8; MAX_SIG_LENGTH])> =
             addrs.iter().map(|&a| (a, [0; MAX_SIG_LENGTH])).collect();
 
         let mut read_list: Vec<_> = bufs
             .iter_mut()
-            .map(|(a, b)| VirtualReadData(*a, b))
+            .map(|(a, b)| CTup2(*a, (&mut b[..]).into()))
             .collect();
 
-        process
-            .virt_mem
-            .virt_read_raw_list(&mut read_list)
-            .data_part()?;
+        process.read_raw_list(&mut read_list).data_part()?;
 
-        let bitness = process.proc_info.proc_arch.bits().into();
+        let bitness = ArchitectureObj::from(process.info().proc_arch)
+            .bits()
+            .into();
 
         let mut states: Vec<_> = bufs
             .iter()
             .map(|(start_ip, buf)| {
                 let mut decoder = Decoder::new(bitness, buf, DecoderOptions::NONE);
-                decoder.set_ip(start_ip.as_u64());
+                decoder.set_ip(start_ip.to_umem() as u64);
                 Sigstate {
                     start_ip: *start_ip,
                     buf,
@@ -242,9 +224,7 @@ impl Sigmaker {
                     added = true;
                 }
             }
-            if !added
-                || Self::has_unique_matches(&states, &mut process.virt_mem, &ranges, &mut out)?
-            {
+            if !added || Self::has_unique_matches(&states, process, &ranges, &mut out)? {
                 break;
             }
         }
