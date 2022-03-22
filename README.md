@@ -15,7 +15,7 @@ scanflow boasts a feature set similar to the likes of CheatEngine, with a simple
 1. Install the CLI:
 
 ```
-cargo install scanflow-cli
+cargo install scanflow-cli --version ^0.2.0-beta
 ```
 
 2. Optionally enable ptrace for the binary (for use with qemu):
