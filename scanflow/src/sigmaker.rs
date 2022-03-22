@@ -191,7 +191,7 @@ impl Sigmaker {
 
         let mut read_list: Vec<_> = bufs
             .iter_mut()
-            .map(|(a, b)| MemData(*a, (&mut b[..]).into()))
+            .map(|(a, b)| CTup2(*a, (&mut b[..]).into()))
             .collect();
 
         process.read_raw_list(&mut read_list).data_part()?;

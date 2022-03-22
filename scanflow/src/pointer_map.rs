@@ -48,7 +48,7 @@ impl PointerMap {
         let pb = PBar::new(
             mem_map
                 .iter()
-                .map(|MemData(size, _)| size.to_umem() as u64)
+                .map(|CTup3(_, size, _)| size.to_umem() as u64)
                 .sum::<u64>(),
             true,
         );
@@ -57,7 +57,7 @@ impl PointerMap {
         let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + size_addr - 1]);
 
         self.map
-            .par_extend(mem_map.par_iter().flat_map(|&MemData(address, size)| {
+            .par_extend(mem_map.par_iter().flat_map(|&CTup3(address, size, _)| {
                 (0..size)
                     .into_iter()
                     .step_by(0x1000)
@@ -82,7 +82,7 @@ impl PointerMap {
                                 arr[0..buf.len()].copy_from_slice(buf);
                                 let out_addr = Address::from(u64::from_le_bytes(arr));
                                 if mem_map
-                                    .binary_search_by(|&MemData(a, s)| {
+                                    .binary_search_by(|&CTup3(a, s, _)| {
                                         if out_addr >= a && out_addr < a + s {
                                             Ordering::Equal
                                         } else {

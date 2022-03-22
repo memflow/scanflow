@@ -12,7 +12,11 @@ mod cli;
 
 fn main() -> Result<()> {
     let matches = parse_args();
-    let (chain, target, level) = extract_args(&matches)?;
+    let (chain, target, elevate, level) = extract_args(&matches)?;
+
+    if elevate {
+        sudo::escalate_if_needed().expect("failed to elevate privileges");
+    }
 
     TermLogger::init(
         level.to_level_filter(),
@@ -31,7 +35,7 @@ fn main() -> Result<()> {
 }
 
 fn parse_args() -> ArgMatches {
-    App::new("scanflow-cli")
+    Command::new("scanflow-cli")
         .version(crate_version!())
         .author(crate_authors!())
         .arg(Arg::new("verbose").short('v').multiple_occurrences(true))
@@ -51,11 +55,17 @@ fn parse_args() -> ArgMatches {
                 .required(true)
                 .multiple_occurrences(true),
         )
+        .arg(
+            Arg::new("elevate")
+                .long("elevate")
+                .short('e')
+                .required(false),
+        )
         .arg(Arg::new("program").takes_value(true).required(true))
         .get_matches()
 }
 
-fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, log::Level)> {
+fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, bool, log::Level)> {
     // set log level
     let level = match matches.occurrences_of("verbose") {
         0 => Level::Error,
@@ -83,6 +93,7 @@ fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, log::Level)> {
     Ok((
         OsChain::new(conn_iter, os_iter)?,
         matches.value_of("program").unwrap_or(""),
+        matches.occurrences_of("elevate") > 0,
         level,
     ))
 }

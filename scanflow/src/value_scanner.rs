@@ -49,7 +49,7 @@ impl ValueScanner {
             let pb = PBar::new(
                 self.mem_map
                     .iter()
-                    .map(|MemData(size, _)| size.to_umem() as u64)
+                    .map(|CTup3(size, _, _)| size.to_umem() as u64)
                     .sum::<u64>(),
                 true,
             );
@@ -57,8 +57,8 @@ impl ValueScanner {
             let ctx = ThreadLocalCtx::new_locked(move || proc.clone());
             let ctx_buf = ThreadLocalCtx::new(|| vec![0; 0x1000 + data.len() - 1]);
 
-            self.matches
-                .par_extend(self.mem_map.par_iter().flat_map(|&MemData(address, size)| {
+            self.matches.par_extend(self.mem_map.par_iter().flat_map(
+                |&CTup3(address, size, _)| {
                     (0..size)
                         .into_iter()
                         .step_by(0x1000)
@@ -91,7 +91,8 @@ impl ValueScanner {
                         .flatten()
                         .collect::<Vec<_>>()
                         .into_par_iter()
-                }));
+                },
+            ));
 
             self.scanned = true;
             pb.finish();

@@ -12,7 +12,7 @@ repository = "https://github.com/h33p/scanflow"
 readme = "../README.md"
 
 [dependencies]
-memflow = { git = "https://github.com/memflow/memflow.git", branch = "next" }
+memflow = "0.2.0-beta"
 iced-x86 = "1.10.0"
 pbr = { version = "1.0", optional = true }
 rayon = "1.5"
