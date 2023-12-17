@@ -14,6 +14,11 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.74
+          target: aarch64-unknown-linux-gnu
+          override: true
 
       - name: Build
         run: cargo build --workspace --all-features --verbose
@@ -27,7 +32,7 @@ jobs:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: 1.74
           target: aarch64-unknown-linux-gnu
           override: true
       - uses: actions-rs/cargo@v1
@@ -43,6 +48,11 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.74
+          target: aarch64-unknown-linux-gnu
+          override: true
 
       - name: Pre-build binaries (for inventory integration tests)
         run: cargo build --workspace --all-features --verbose
@@ -61,7 +71,7 @@ jobs:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: 1.74
           target: aarch64-unknown-linux-gnu
           override: true
       - name: Pre-build binaries (for inventory integration tests)
@@ -81,7 +91,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: rustup component add clippy
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.74
+          target: aarch64-unknown-linux-gnu
+          override: true
+          components: rustfmt, clippy
       - name: Check formatting
         run: cargo fmt -- --check
       - uses: actions-rs/clippy-check@v1
