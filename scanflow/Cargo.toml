@@ -1,6 +1,6 @@
 [package]
 name = "scanflow"
-version = "0.2.0-beta11"
+version = "0.2.0"
 authors = ["Aurimas Blažulionis <0x60@pm.me>"]
 edition = "2018"
 license = "MIT"
@@ -12,7 +12,7 @@ repository = "https://github.com/h33p/scanflow"
 readme = "../README.md"
 
 [dependencies]
-memflow = "=0.2.0-beta11"
+memflow = "0.2"
 iced-x86 = "1.10.0"
 pbr = { version = "1.0", optional = true }
 rayon = "1.5"
