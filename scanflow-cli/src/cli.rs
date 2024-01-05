@@ -56,15 +56,23 @@ pub struct CmdDef<'a, T> {
     short: &'a str,
     invoke: CmdHandler<T>,
     help: &'a str,
+    long_help: Option<&'a str>,
 }
 
 impl<'a, T> CmdDef<'a, T> {
-    fn new(long: &'a str, short: &'a str, handle: CmdHandler<T>, help: &'a str) -> Self {
+    fn new(
+        long: &'a str,
+        short: &'a str,
+        handle: CmdHandler<T>,
+        help: &'a str,
+        long_help: Option<&'a str>,
+    ) -> Self {
         Self {
             long,
             short,
             invoke: handle,
             help,
+            long_help,
         }
     }
 }
@@ -94,7 +102,7 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
             ctx.pointer_map.reset();
             ctx.typename = None;
             Ok(())
-        }, "reset all context state"),
+        }, "reset all context state", None),
         CmdDef::<T>::new("reinterpret", "ri", |arg, ctx| {
 
             let mut split = arg.split_whitespace();
@@ -115,24 +123,27 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
                 Err(ErrorKind::InvalidArgument.into())
             }
 
-        }, "reinterpret matches as another type. Usage: {{type}} ({{unsized len}})"),
+        }, "reinterpret matches as another type. Usage: {type} ({unsized len})", Some(r#"- {type} 
+    - Target recast type: `str, str_utf16, i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64`
+- ({unsized len})
+    - Optional: Size of the type, Applicable to `str` and `str_utf16`"#)),
         CmdDef::<T>::new("add", "a", |arg, ctx| {
             let addr = u64::from_str_radix(arg, 16).map_err(|_| ErrorKind::InvalidArgument)?;
             ctx.value_scanner.matches_mut().push(addr.into());
             Ok(())
-        }, "manually add an address to matches"),
+        }, "manually add an address to matches", None),
         CmdDef::<T>::new("remove", "rm", |arg, ctx| {
             let idx = arg.parse::<usize>().map_err(|_| ErrorKind::InvalidArgument)?;
             ctx.value_scanner.matches_mut().remove(idx);
             Ok(())
-        }, "remove match by index"),
+        }, "remove match by index", None),
         CmdDef::new("print", "p", |_, ctx| { 
             if let Some(t) = &ctx.typename {
                 print_matches(&ctx.value_scanner, &mut ctx.process, ctx.buf_len, t)
             } else {
                 Err(ErrorKind::Uninitialized.into())
             }
-        }, "print found matches after initial scan"),
+        }, "print found matches after initial scan", None),
         CmdDef::new("pointer_map", "pm", |_, ctx| {
             let size_addr = ArchitectureObj::from(ctx.process.info().proc_arch).size_addr();
 
@@ -141,13 +152,17 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
                 &mut ctx.process,
                 size_addr,
             )
-        }, "build a pointer map"),
+        }, "build a pointer map", Some(r#"- Re-builds pointer map, (used in `offset_scan`)
+- Done automatically in `offset_scan`.
+- Allows to manually trigger rebuild, if process memory has changed significantly.
         CmdDef::new("globals", "g", |args, ctx| {
             ctx.disasm.reset();
             ctx.disasm.collect_globals(&mut ctx.process, if args.is_empty() { None } else { Some(args) })?;
             println!("Global variable references found: {:x}", ctx.disasm.map().len());
             Ok(())
-        }, "find all global variables referenced by code"),
+        }, "find all global variables referenced by code. args: ({module})", r#"Finds globals in target process' binary.
+
+It is automatically invoked by `sigmaker` and `offset_scan`, however, executing it manually allows the user to limit global variable search to a single module."#)),
         CmdDef::new("sigmaker", "s", |args: &str, ctx| {
             if let Some(addr) = scan_fmt_some!(args, "{x}", [hex u64]) {
                 match Sigmaker::find_sigs(&mut ctx.process, &ctx.disasm, addr.into()) {
@@ -163,7 +178,9 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
             } else {
                 Err(ErrorKind::ArgValidation.into())
             }
-        }, "build a pointer map. args: {addr}"),
+        }, "finds code signatures referring to given address. args: {addr}", Some(r#"Usage: After using offset scan, take the first hex value of the result you want, and sigmaker will produce a signature which you can scan for.
+
+If `globals` was not previously run, then this command will generate a list of globals on all executable regions. If you wish to look for signatures within a single module, first run `globals {module}`."#)),
         CmdDef::new("offset_scan", "os", |args, ctx| {
             if let (Some(use_di), Some(lrange), Some(urange), Some(max_depth), filter_addr) =
                 scan_fmt_some!(args, "{} {} {} {} {x}", String, usize, usize, usize, [hex u64])
@@ -230,7 +247,22 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
             } else {
                 Err(ErrorKind::InvalidArgument.into())
             }
-        }, "scan for offsets to matches. Arguments: {y/[n]} {lower range} {upper range} {max depth} ({filter})"),
+        }, "scan for offsets to matches. Arguments: {y/[n]} {lower range} {upper range} {max depth} ({filter})", Some(r#"Arguments:
+- {y/[n]} 
+    - y: Use disassembler to find instructions in binary to refer to globals. If `globals` was not previously run, then this command will generate a list of globals on all executable regions. If you wish to look for pointers referred from a single module, first run `globals {module}`.
+    - n: use the whole memory range
+    - Default = n
+- {lower range} 
+    - scan_result_ptr - lower range 
+- {upper range} 
+    - scan_result_ptr + upper range
+    - `[scan_result_ptr - lower range, scan_result_ptr + upper range]  = scan area`
+- {max depth} 
+    - max scan depth
+- ({filter})
+    - Optional: Filter address (hex)
+
+Explanation: Finds a pointer chains from the binary to the scan results."#)),
         CmdDef::new("write", "wr", |args, ctx| {
             write_value(
                 args,
@@ -238,7 +270,15 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
                 ctx.value_scanner.matches(),
                 &mut ctx.process,
             )
-        }, "write values to select matches. Arguments: {idx/*} {o/c} {value}"),
+        }, "write values to select matches. Arguments: {idx/*} {o/c} {value}", Some(r#"Arguments:
+- {idx/*}
+    - `idx`: Write to the search match idx.
+    - `*`: Write to the all search matches. (I'd prefer `all` as oppose to `*`)
+- {o/c}
+    - `o`: Write once.
+    - `c`: Spawn thread and continuously write.
+- value: Self explanatory
+"#)),
         ];
 
     loop {
@@ -260,29 +300,51 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
         match cmd {
             "quit" | "q" => break,
             "help" | "h" => {
-                println!("Command reference:");
-                println!("quit q: quit the CLI");
-                println!("help h: show this help");
+                if args.is_empty() {
+                    println!("Command reference:");
+                    println!("quit q: quit the CLI");
+                    println!("help h: show this help");
+                    println!("help h {{cmd}}: show longer help for a given command");
 
-                for cmd in &cmds {
-                    println!("{}", cmd.help());
+                    for cmd in &cmds {
+                        println!("{}", cmd.help());
+                    }
+
+                    println!();
+
+                    println!("Anything not in this list will be interpreted as a scan input.");
+
+                    println!();
+
+                    println!("To scan memory, enter wanted data type and its value. The type is omitted in consequtive function calls.");
+                    println!("Available types: str, str_utf16, i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64");
+
+                    println!();
+
+                    println!("Example:");
+                    println!("i64 64");
+                    println!("Next filtering call:");
+                    println!("42");
+                } else {
+                    if let Some(cmd) = cmds
+                        .iter_mut()
+                        .find(|cmd| cmd.short == args || cmd.long == args)
+                    {
+                        println!("{}", cmd.help);
+                        println!();
+                        if let Some(long) = cmd.long_help {
+                            println!("{}", long);
+                        } else {
+                            println!("(no further help available)");
+                        }
+                    } else if ["quit", "help", "q", "h"].contains(&args) {
+                        println!("Built-in command with no further help");
+                    } else {
+                        println!(
+                            "Could not find command `{args}`. Use `help` for command reference."
+                        );
+                    }
                 }
-
-                println!();
-
-                println!("Anything not in this list will be interpreted as a scan input.");
-
-                println!();
-
-                println!("To scan memory, enter wanted data type and its value. The type is omitted in consequtive function calls.");
-                println!("Available types: str, str_utf16, i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, f32, f64");
-
-                println!();
-
-                println!("Example:");
-                println!("i64 64");
-                println!("Next filtering call:");
-                println!("42");
             }
             x => {
                 if let Some(cmd) = cmds.iter_mut().find(|cmd| cmd.short == x || cmd.long == x) {
