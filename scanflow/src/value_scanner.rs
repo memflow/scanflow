@@ -34,13 +34,23 @@ impl ValueScanner {
     ///
     /// * `mem` - memory object to scan for values in
     /// * `data` - data to scan or filter against
-    pub fn scan_for(
+    pub fn scan_for<T: Process + MemoryView + Clone>(
         &mut self,
-        proc: &mut (impl Process + MemoryView + Clone),
+        proc: &mut T,
+        data: &[u8],
+    ) -> Result<()> {
+        self.scan_for_2(proc, |p, a, b, c| p.mapped_mem_range_vec(a, b, c), data)
+    }
+
+    pub fn scan_for_2<T: MemoryView + Clone>(
+        &mut self,
+        proc: &mut T,
+        maps: fn(&mut T, imem, Address, Address) -> Vec<MemoryRange>,
         data: &[u8],
     ) -> Result<()> {
         if !self.scanned {
-            self.mem_map = proc.mapped_mem_range_vec(
+            self.mem_map = maps(
+                proc,
                 mem::mb(16) as _,
                 Address::null(),
                 ((1 as umem) << 47).into(),

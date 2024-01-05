@@ -17,5 +17,6 @@ simplelog = "0.8.0"
 scan_fmt = "0.2.5"
 scanflow = { version = "0.2", path = "../scanflow", features = ["progress_bar"] }
 clap = { version = "3", features = ["cargo"] }
+either = "1"
 log = "0.4"
 sudo = "0.6"

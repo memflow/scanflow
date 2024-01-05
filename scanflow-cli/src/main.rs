@@ -1,4 +1,5 @@
 use clap::*;
+use either::{Either, Left, Right};
 use log::Level;
 
 use memflow::prelude::v1::{Result, *};
@@ -30,11 +31,18 @@ fn main() -> Result<()> {
 
     let inventory = Inventory::scan();
 
-    let os = inventory.builder().os_chain(chain).build()?;
-
-    let process = os.into_process_by_name(&target)?;
-
-    cli::run(process)
+    match chain {
+        Left(chain) => {
+            let target = target.expect("In OS mode target program must be supplied");
+            let os = inventory.builder().os_chain(chain).build()?;
+            let process = os.into_process_by_name(&target)?;
+            cli::run(process)
+        }
+        Right(chain) => {
+            let conn = inventory.builder().connector_chain(chain).build()?;
+            cli::run_with_view(conn.into_phys_view())
+        }
+    }
 }
 
 fn parse_args() -> ArgMatches {
@@ -55,7 +63,7 @@ fn parse_args() -> ArgMatches {
                 .long("os")
                 .short('o')
                 .takes_value(true)
-                .required(true)
+                .required(false)
                 .multiple_occurrences(true),
         )
         .arg(
@@ -64,11 +72,18 @@ fn parse_args() -> ArgMatches {
                 .short('e')
                 .required(false),
         )
-        .arg(Arg::new("program").takes_value(true).required(true))
+        .arg(Arg::new("program").takes_value(true).required(false))
         .get_matches()
 }
 
-fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, bool, log::Level)> {
+fn extract_args(
+    matches: &ArgMatches,
+) -> Result<(
+    Either<OsChain, ConnectorChain>,
+    Option<&str>,
+    bool,
+    log::Level,
+)> {
     // set log level
     let level = match matches.occurrences_of("verbose") {
         0 => Level::Error,
@@ -84,18 +99,27 @@ fn extract_args(matches: &ArgMatches) -> Result<(OsChain, &str, bool, log::Level
         .zip(matches.values_of("connector"))
         .map(|(a, b)| a.zip(b))
         .into_iter()
-        .flatten();
+        .flatten()
+        .collect::<Vec<_>>();
 
     let os_iter = matches
         .indices_of("os")
         .zip(matches.values_of("os"))
         .map(|(a, b)| a.zip(b))
         .into_iter()
-        .flatten();
+        .flatten()
+        .collect::<Vec<_>>();
 
     Ok((
-        OsChain::new(conn_iter, os_iter)?,
-        matches.value_of("program").unwrap_or(""),
+        if let Ok(chain) = OsChain::new(conn_iter.iter().copied(), os_iter.iter().copied()) {
+            Left(chain)
+        } else {
+            Right(ConnectorChain::new(
+                conn_iter.into_iter(),
+                os_iter.into_iter(),
+            )?)
+        },
+        matches.value_of("program"),
         matches.occurrences_of("elevate") > 0,
         level,
     ))

@@ -51,7 +51,6 @@ impl Disasm {
             modules
                 .into_par_iter()
                 .filter_map(|m| {
-
                     if let Some(module) = module {
                         if m.name.as_ref() != module {
                             return None;
