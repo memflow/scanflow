@@ -49,7 +49,7 @@ impl ValueScanner {
             let pb = PBar::new(
                 self.mem_map
                     .iter()
-                    .map(|CTup3(size, _, _)| size.to_umem() as u64)
+                    .map(|CTup3(_, size, _)| *size as u64)
                     .sum::<u64>(),
                 true,
             );

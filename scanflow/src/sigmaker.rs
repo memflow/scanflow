@@ -178,7 +178,7 @@ impl Sigmaker {
         process.module_section_list_callback(
             &module,
             (&mut |s: SectionInfo| {
-                if s.name.as_ref() == ".text" {
+                if s.is_text() {
                     ranges.push((s.base, s.size));
                 }
                 true

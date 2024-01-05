@@ -34,6 +34,7 @@ impl Disasm {
     pub fn collect_globals(
         &mut self,
         process: &mut (impl Process + MemoryView + Clone),
+        module: Option<&str>,
     ) -> Result<()> {
         self.reset();
         let modules = process.module_list()?;
@@ -50,6 +51,13 @@ impl Disasm {
             modules
                 .into_par_iter()
                 .filter_map(|m| {
+
+                    if let Some(module) = module {
+                        if m.name.as_ref() != module {
+                            return None;
+                        }
+                    }
+
                     let mut process = unsafe { ctx.get() };
                     let mut sections = unsafe { sections.get() };
 
@@ -63,7 +71,7 @@ impl Disasm {
 
                     let ret = sections
                         .iter()
-                        .filter(|s| s.name.as_ref() == ".text")
+                        .filter(|s| s.is_text())
                         .par_bridge()
                         .flat_map(|section| {
                             let mut process = unsafe { ctx.get() };

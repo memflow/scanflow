@@ -142,9 +142,9 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
                 size_addr,
             )
         }, "build a pointer map"),
-        CmdDef::new("globals", "g", |_, ctx| {
+        CmdDef::new("globals", "g", |args, ctx| {
             ctx.disasm.reset();
-            ctx.disasm.collect_globals(&mut ctx.process)?;
+            ctx.disasm.collect_globals(&mut ctx.process, if args.is_empty() { None } else { Some(args) })?;
             println!("Global variable references found: {:x}", ctx.disasm.map().len());
             Ok(())
         }, "find all global variables referenced by code"),
@@ -180,7 +180,7 @@ pub fn run<T: Process + MemoryView + Clone>(process: T) -> Result<()> {
 
                 let matches = if use_di == "y" {
                     if ctx.disasm.map().is_empty() {
-                        ctx.disasm.collect_globals(&mut ctx.process)?;
+                        ctx.disasm.collect_globals(&mut ctx.process, None)?;
                     }
                     ctx.pointer_map.find_matches_addrs(
                         (lrange, urange),
